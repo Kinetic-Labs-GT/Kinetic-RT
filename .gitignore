@@ -67,3 +67,45 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+
+# --- Kinetic-RT Custom Ignore ---
+
+# Python Bytecode & Environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+
+# Build and Binaries
+build/
+bin/
+dist/
+*.so
+*.out
+*.exe
+
+# ROCm / HIP Generated Files
+*.hip.o
+*.o
+*.a
+*.gp
+*.hip_compiled
+
+# AI/Machine Learning Specifics
+*.bin
+*.pth
+*.onnx
+*.safetensors
+models/
+weights/
+checkpoint/
+
+# Logs and Debugging
+logs/
+*.log
+.vscode/
+.idea/
+.DS_Store
