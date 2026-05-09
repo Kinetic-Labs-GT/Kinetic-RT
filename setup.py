@@ -25,7 +25,7 @@ if mock_hip:
 ext_modules = [
     Extension(
         'kinetic_rt',
-        ['bindings/python_bindings.cpp', 'src/GraphWrapper.cpp', 'tests/mock_hip.cpp'],
+        ['bindings/python_bindings.cpp', 'src/GraphWrapper.cpp', 'src/AOTEngine.cpp', 'tests/mock_hip.cpp'],
         include_dirs=[
             # Path to pybind11 headers
             get_pybind_include(),
