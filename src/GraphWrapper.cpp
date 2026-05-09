@@ -10,13 +10,22 @@ do { \
 } while(0)
 
 GraphWrapper::GraphWrapper() : graph_(nullptr), graph_exec_(nullptr), is_instantiated_(false), current_batch_size_(-1), current_seq_len_(-1) {
+    CHECK_HIP(hipEventCreate(&sync_event_));
 }
 
 GraphWrapper::~GraphWrapper() {
-    invalidate();
+    try {
+        invalidate();
+        hipEventDestroy(sync_event_);
+    } catch (...) {
+        // Suppress exceptions in destructor
+    }
 }
 
 void GraphWrapper::invalidate() {
+    // Ensure no in-flight launches are using this graph before destroying
+    CHECK_HIP(hipEventSynchronize(sync_event_));
+
     if (graph_exec_ != nullptr) {
         CHECK_HIP(hipGraphExecDestroy(graph_exec_));
         graph_exec_ = nullptr;
@@ -28,6 +37,7 @@ void GraphWrapper::invalidate() {
     is_instantiated_ = false;
     current_batch_size_ = -1;
     current_seq_len_ = -1;
+    pinned_buffers_ = pybind11::list(); // Release python references securely
 }
 
 bool GraphWrapper::is_valid(int batch_size, int seq_len) const {
@@ -64,6 +74,10 @@ void GraphWrapper::end_capture(uintptr_t stream_ptr) {
     is_instantiated_ = true;
 }
 
+void GraphWrapper::set_pinned_buffers(pybind11::list buffers) {
+    pinned_buffers_ = buffers;
+}
+
 void GraphWrapper::launch(uintptr_t stream_ptr) {
     if (!is_instantiated_) {
         throw std::runtime_error("Cannot launch graph: not instantiated.");
@@ -71,4 +85,6 @@ void GraphWrapper::launch(uintptr_t stream_ptr) {
 
     hipStream_t stream = reinterpret_cast<hipStream_t>(stream_ptr);
     CHECK_HIP(hipGraphLaunch(graph_exec_, stream));
+    // Record event to know when this launch finishes, so invalidate() can wait
+    CHECK_HIP(hipEventRecord(sync_event_, stream));
 }

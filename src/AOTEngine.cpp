@@ -1,6 +1,7 @@
 #include "AOTEngine.h"
 #include <fstream>
 #include <cstring>
+#include <endian.h>
 
 #define CHECK_HIP(cmd) \
 do { \
@@ -62,17 +63,17 @@ void Serializer::save_kin_file(const std::string& filepath, const std::string& d
     }
 
     KinHeader header;
-    header.magic_number = 0x4B494E00; // "KIN\0"
-    header.version = 1;
+    header.magic_number = htole32(0x4B494E00); // "KIN\0"
+    header.version = htole32(1);
     std::strncpy(header.device_id, device_id.c_str(), sizeof(header.device_id) - 1);
     header.device_id[sizeof(header.device_id) - 1] = '\0';
-    header.weights_hash = weights_hash;
+    header.weights_hash = htole64(weights_hash);
 
-    header.op_graph_data_offset = sizeof(KinHeader);
-    header.op_graph_data_size = op_graph_data.size();
+    header.op_graph_data_offset = htole64(sizeof(KinHeader));
+    header.op_graph_data_size = htole64(op_graph_data.size());
 
-    header.kernel_binaries_offset = header.op_graph_data_offset + header.op_graph_data_size;
-    header.kernel_binaries_size = kernel_binaries.size();
+    header.kernel_binaries_offset = htole64(sizeof(KinHeader) + op_graph_data.size());
+    header.kernel_binaries_size = htole64(kernel_binaries.size());
 
     out.write(reinterpret_cast<const char*>(&header), sizeof(header));
     out.write(reinterpret_cast<const char*>(op_graph_data.data()), op_graph_data.size());
@@ -80,16 +81,48 @@ void Serializer::save_kin_file(const std::string& filepath, const std::string& d
 }
 
 std::vector<uint8_t> Serializer::load_kin_file(const std::string& filepath) {
-    std::ifstream in(filepath, std::ios::binary);
+    std::ifstream in(filepath, std::ios::binary | std::ios::ate);
     if (!in) {
         throw std::runtime_error("Failed to open file for reading: " + filepath);
+    }
+
+    std::streamsize file_size = in.tellg();
+    in.seekg(0, std::ios::beg);
+
+    if (file_size < static_cast<std::streamsize>(sizeof(KinHeader))) {
+        throw std::runtime_error("Invalid file format: file too small for header.");
     }
 
     KinHeader header;
     in.read(reinterpret_cast<char*>(&header), sizeof(header));
 
-    if (header.magic_number != 0x4B494E00) {
+    uint32_t magic_number = le32toh(header.magic_number);
+    uint32_t version = le32toh(header.version);
+    uint64_t weights_hash = le64toh(header.weights_hash);
+    uint64_t op_graph_data_offset = le64toh(header.op_graph_data_offset);
+    uint64_t op_graph_data_size = le64toh(header.op_graph_data_size);
+    uint64_t kernel_binaries_offset = le64toh(header.kernel_binaries_offset);
+    uint64_t kernel_binaries_size = le64toh(header.kernel_binaries_size);
+
+    if (magic_number != 0x4B494E00) {
         throw std::runtime_error("Invalid file format: bad magic number.");
+    }
+
+    // Offset/Size Validation (Serialization Hardening)
+    // Check against arithmetic overflow and file boundaries
+    if (op_graph_data_offset + op_graph_data_size < op_graph_data_offset ||
+        kernel_binaries_offset + kernel_binaries_size < kernel_binaries_offset) {
+        throw std::runtime_error("Invalid file format: offset overflow.");
+    }
+
+    if (op_graph_data_offset + op_graph_data_size > static_cast<uint64_t>(file_size) ||
+        kernel_binaries_offset + kernel_binaries_size > static_cast<uint64_t>(file_size)) {
+        throw std::runtime_error("Invalid file format: sizes exceed file bounds.");
+    }
+
+    // Additional sanity bounds for massive allocations
+    if (kernel_binaries_size > 1024ULL * 1024ULL * 1024ULL * 2ULL) { // 2 GB max arbitrary limit
+        throw std::runtime_error("Invalid file format: kernel binary excessively large.");
     }
 
     // Verify Hardware Mismatch
@@ -102,9 +135,13 @@ std::vector<uint8_t> Serializer::load_kin_file(const std::string& filepath) {
     }
 
     // Skip op graph data for now, just read kernel binaries
-    in.seekg(header.kernel_binaries_offset, std::ios::beg);
-    std::vector<uint8_t> kernel_binaries(header.kernel_binaries_size);
-    in.read(reinterpret_cast<char*>(kernel_binaries.data()), header.kernel_binaries_size);
+    in.seekg(kernel_binaries_offset, std::ios::beg);
+    std::vector<uint8_t> kernel_binaries(kernel_binaries_size);
+    in.read(reinterpret_cast<char*>(kernel_binaries.data()), kernel_binaries_size);
+
+    if (in.gcount() != static_cast<std::streamsize>(kernel_binaries_size)) {
+        throw std::runtime_error("Invalid file format: short read on kernel binaries.");
+    }
 
     return kernel_binaries;
 }
@@ -115,7 +152,10 @@ AOTEngine::AOTEngine() : module_(nullptr) {
 }
 
 AOTEngine::~AOTEngine() {
-    // If we had a module unload, we'd do it here
+    if (module_ != nullptr) {
+        hipModuleUnload(module_);
+        module_ = nullptr;
+    }
 }
 
 void AOTEngine::compile_ahead_of_time(const std::string& output_filepath, uintptr_t stream_ptr) {
@@ -146,6 +186,10 @@ void AOTEngine::load_model(const std::string& filepath) {
 }
 
 void AOTEngine::load_kernel(const std::vector<uint8_t>& binary_data) {
+    if (module_ != nullptr) {
+        CHECK_HIP(hipModuleUnload(module_));
+        module_ = nullptr;
+    }
     // hipModuleLoadData expects the binary image.
     CHECK_HIP(hipModuleLoadData(&module_, binary_data.data()));
 }

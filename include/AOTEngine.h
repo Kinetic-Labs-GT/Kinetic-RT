@@ -19,6 +19,7 @@ public:
 };
 
 // Represents the .kin file structured header
+#pragma pack(push, 1)
 struct KinHeader {
     uint32_t magic_number; // e.g., 0x4B494E00
     uint32_t version;
@@ -29,6 +30,7 @@ struct KinHeader {
     uint64_t kernel_binaries_offset;
     uint64_t kernel_binaries_size;
 };
+#pragma pack(pop)
 
 // Simple structured wrapper around kernel configurations (e.g. GEMM)
 struct KernelVariant {
