@@ -5,6 +5,7 @@
 #include <vector>
 #include <stdexcept>
 #include <iostream>
+#include <mutex>
 
 #if defined(MOCK_HIP)
 #include "../tests/mock_hip.h"
@@ -70,6 +71,8 @@ private:
     SmartAutotuner autotuner_;
     Serializer serializer_;
     hipModule_t module_;
+    std::recursive_mutex engine_mutex_;
 
     void load_kernel(const std::vector<uint8_t>& binary_data);
+    void validate_elf_structure(const std::vector<uint8_t>& binary_data) const;
 };

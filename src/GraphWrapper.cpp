@@ -23,7 +23,14 @@ GraphWrapper::~GraphWrapper() {
 }
 
 void GraphWrapper::invalidate() {
+    std::lock_guard<std::recursive_mutex> lock(engine_mutex_);
+
     // Ensure no in-flight launches are using this graph before destroying
+    // Robust Multi-Stream Synchronization: Sync every in-flight event
+    for (auto& state : in_flight_states_) {
+        CHECK_HIP(hipEventSynchronize(state.event));
+    }
+    // Also sync the generic event just in case
     CHECK_HIP(hipEventSynchronize(sync_event_));
 
     if (graph_exec_ != nullptr) {
@@ -37,8 +44,8 @@ void GraphWrapper::invalidate() {
     is_instantiated_ = false;
     current_batch_size_ = -1;
     current_seq_len_ = -1;
-    cleanup_in_flight_states(); // Pop any completed ones
-    // Clear the rest
+
+    // Everything is synchronized, so we can clean it all up
     for (auto& state : in_flight_states_) {
         CHECK_HIP(hipEventDestroy(state.event));
     }
@@ -60,6 +67,7 @@ void GraphWrapper::cleanup_in_flight_states() {
 }
 
 bool GraphWrapper::is_valid(int batch_size, int seq_len) const {
+    std::lock_guard<std::recursive_mutex> lock(const_cast<GraphWrapper*>(this)->engine_mutex_);
     if (!is_instantiated_) {
         return false;
     }
@@ -67,6 +75,7 @@ bool GraphWrapper::is_valid(int batch_size, int seq_len) const {
 }
 
 void GraphWrapper::begin_capture(uintptr_t stream_ptr, int batch_size, int seq_len) {
+    std::lock_guard<std::recursive_mutex> lock(engine_mutex_);
     hipStream_t stream = reinterpret_cast<hipStream_t>(stream_ptr);
 
     // If shapes change or graph is not instantiated, invalidate
@@ -84,6 +93,7 @@ void GraphWrapper::begin_capture(uintptr_t stream_ptr, int batch_size, int seq_l
 }
 
 void GraphWrapper::end_capture(uintptr_t stream_ptr) {
+    std::lock_guard<std::recursive_mutex> lock(engine_mutex_);
     hipStream_t stream = reinterpret_cast<hipStream_t>(stream_ptr);
 
     CHECK_HIP(hipStreamEndCapture(stream, &graph_));
@@ -94,6 +104,7 @@ void GraphWrapper::end_capture(uintptr_t stream_ptr) {
 }
 
 void GraphWrapper::launch(uintptr_t stream_ptr, pybind11::object stream_obj, pybind11::list buffers) {
+    std::lock_guard<std::recursive_mutex> lock(engine_mutex_);
     cleanup_in_flight_states();
 
     if (!is_instantiated_) {
@@ -105,19 +116,32 @@ void GraphWrapper::launch(uintptr_t stream_ptr, pybind11::object stream_obj, pyb
 
     // Record a new event for this specific launch
     hipEvent_t event;
-    CHECK_HIP(hipEventCreate(&event));
-    CHECK_HIP(hipEventRecord(event, stream));
-
-    // Store references to prevent Python from GC'ing the stream or buffers
-    InFlightState state;
-    state.event = event;
-    state.refs.push_back(stream_obj);
-    for (auto item : buffers) {
-        state.refs.push_back(pybind11::reinterpret_borrow<pybind11::object>(item));
+    hipError_t err_create = hipEventCreate(&event);
+    hipError_t err_record = hipSuccess;
+    if (err_create == hipSuccess) {
+        err_record = hipEventRecord(event, stream);
     }
 
-    in_flight_states_.push_back(std::move(state));
+    if (err_create != hipSuccess || err_record != hipSuccess) {
+        // Fail-Safe: Synchronize immediately if event creation fails
+        // This ensures Python objects stay alive while GPU executes
+        CHECK_HIP(hipStreamSynchronize(stream));
+    } else {
+        // Store references to prevent Python from GC'ing the stream or buffers
+        InFlightState state;
+        state.event = event;
+        state.refs.reserve(buffers.size() + 1); // Micro-optimization
+        state.refs.emplace_back(stream_obj);
+        for (auto item : buffers) {
+            state.refs.emplace_back(pybind11::reinterpret_borrow<pybind11::object>(item));
+        }
+
+        in_flight_states_.emplace_back(std::move(state));
+    }
 
     // Also record the general sync event for invalidate() wait
-    CHECK_HIP(hipEventRecord(sync_event_, stream));
+    hipError_t sync_err = hipEventRecord(sync_event_, stream);
+    if (sync_err != hipSuccess) {
+        CHECK_HIP(hipStreamSynchronize(stream));
+    }
 }

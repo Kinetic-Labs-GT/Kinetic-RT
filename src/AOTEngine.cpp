@@ -159,6 +159,7 @@ AOTEngine::~AOTEngine() {
 }
 
 void AOTEngine::compile_ahead_of_time(const std::string& output_filepath, uintptr_t stream_ptr) {
+    std::lock_guard<std::recursive_mutex> lock(engine_mutex_);
     // 1. Profile and find best kernel
     std::string best_variant = autotuner_.profile_gemm(stream_ptr);
     std::cout << "Selected best GEMM variant: " << best_variant << std::endl;
@@ -170,7 +171,12 @@ void AOTEngine::compile_ahead_of_time(const std::string& output_filepath, uintpt
 
     // 3. Serialize to .kin
     std::vector<uint8_t> dummy_op_graph_data = {0x01, 0x02, 0x03}; // Mock data
-    std::vector<uint8_t> dummy_hsaco = {0x7F, 'E', 'L', 'F'};      // Mock hsaco binary
+
+    // Mock 64-byte hsaco binary that passes deep validation
+    std::vector<uint8_t> dummy_hsaco(64, 0);
+    dummy_hsaco[0] = 0x7F; dummy_hsaco[1] = 'E'; dummy_hsaco[2] = 'L'; dummy_hsaco[3] = 'F';
+    dummy_hsaco[4] = 2; // 64-bit class
+    dummy_hsaco[18] = 0xE0; dummy_hsaco[19] = 0x00; // EM_AMDGPU
 
     uint64_t dummy_weights_hash = 123456789;
 
@@ -178,6 +184,7 @@ void AOTEngine::compile_ahead_of_time(const std::string& output_filepath, uintpt
 }
 
 void AOTEngine::load_model(const std::string& filepath) {
+    std::lock_guard<std::recursive_mutex> lock(engine_mutex_);
     // 1. Load the .kin file and verify hardware
     std::vector<uint8_t> kernel_binaries = serializer_.load_kin_file(filepath);
 
@@ -185,17 +192,35 @@ void AOTEngine::load_model(const std::string& filepath) {
     load_kernel(kernel_binaries);
 }
 
-void AOTEngine::load_kernel(const std::vector<uint8_t>& binary_data) {
-    if (binary_data.empty()) {
-        throw std::runtime_error("Cannot load kernel: binary data is empty.");
+void AOTEngine::validate_elf_structure(const std::vector<uint8_t>& binary_data) const {
+    // Deep Binary Validation
+    if (binary_data.size() < 64) {
+        throw std::runtime_error("Cannot load kernel: binary data too small for a valid ELF header.");
     }
 
     // Check for ELF magic number (\x7fELF)
-    if (binary_data.size() < 4 ||
-        binary_data[0] != 0x7f || binary_data[1] != 'E' ||
+    if (binary_data[0] != 0x7f || binary_data[1] != 'E' ||
         binary_data[2] != 'L'  || binary_data[3] != 'F') {
         throw std::runtime_error("Cannot load kernel: invalid or missing ELF header.");
     }
+
+    // Check for 64-bit class
+    if (binary_data[4] != 2) {
+        throw std::runtime_error("Cannot load kernel: ELF binary is not 64-bit.");
+    }
+
+    // Check for EM_AMDGPU (0xE0) architecture
+    // In an ELF header, e_machine is a 16-bit little-endian integer at offset 18
+    uint16_t e_machine = binary_data[18] | (binary_data[19] << 8);
+    if (e_machine != 0xE0) { // EM_AMDGPU
+        throw std::runtime_error("Cannot load kernel: ELF binary is not for AMDGPU architecture.");
+    }
+}
+
+void AOTEngine::load_kernel(const std::vector<uint8_t>& binary_data) {
+    std::lock_guard<std::recursive_mutex> lock(engine_mutex_);
+
+    validate_elf_structure(binary_data);
 
     if (module_ != nullptr) {
         CHECK_HIP(hipModuleUnload(module_));

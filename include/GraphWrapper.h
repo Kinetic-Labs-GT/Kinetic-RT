@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <deque>
 #include <vector>
+#include <mutex>
 #include <pybind11/pybind11.h>
 
 struct InFlightState {
@@ -55,4 +56,7 @@ private:
 
     // Registry of states currently executing on the GPU
     std::deque<InFlightState> in_flight_states_;
+
+    // Mutex for thread safety
+    std::recursive_mutex engine_mutex_;
 };

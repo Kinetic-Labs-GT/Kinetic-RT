@@ -7,7 +7,12 @@ def test_serializer():
     device_id = "gfx1100"
     weights_hash = 123456789
     op_graph_data = [1, 2, 3]
-    kernel_binaries = [255, 69, 76, 70] # Mock hsaco: \x7fELF
+
+    # Mock hsaco that passes deep validation
+    kernel_binaries = [0] * 64
+    kernel_binaries[0:4] = [0x7f, ord('E'), ord('L'), ord('F')]
+    kernel_binaries[4] = 2
+    kernel_binaries[18:20] = [0xE0, 0x00]
 
     # Save file
     serializer.save_kin_file(filepath, device_id, weights_hash, op_graph_data, kernel_binaries)
