@@ -18,6 +18,10 @@ def test_graph_capture_and_launch():
     # Graph should now be valid for the captured shapes
     assert wrapper.is_valid(batch_size=1, seq_len=128)
 
+    # Test redundant begin_capture
+    wrapper.begin_capture(stream_ptr, batch_size=1, seq_len=128)
+    assert wrapper.is_valid(batch_size=1, seq_len=128)
+
     # 3. Loop (Replay)
     # Pass an integer proxy for stream_obj since bindings cast stream_obj to uintptr_t
     wrapper.launch(stream_ptr, [])
