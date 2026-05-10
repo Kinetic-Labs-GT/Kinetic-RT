@@ -156,6 +156,17 @@ def validate_compilation(compiled_hsaco):
     if not compiled_hsaco.startswith(b"\x7fELF"):
         raise TritonCompilationError("Triton binary lacks the standard ELF magic header.")
 
+    if len(compiled_hsaco) < 20:
+        raise TritonCompilationError("Triton binary is too short to be a valid AMDGPU HSACO.")
+
+    # Check for 64-bit class identifier (offset 4 is 2)
+    if compiled_hsaco[4] != 2:
+        raise TritonCompilationError("Triton binary is not a 64-bit ELF.")
+
+    # Check for EM_AMDGPU architecture identifier (offset 18 is 0xE0)
+    if compiled_hsaco[18] != 0xE0:
+        raise TritonCompilationError("Triton binary architecture is not AMDGPU.")
+
 def compile_and_serialize(engine, serializer, output_filepath, device_id="gfx1100"):
     """
     Triton-to-Kinetic Bridge
