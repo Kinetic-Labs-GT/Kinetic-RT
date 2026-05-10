@@ -95,6 +95,7 @@ std::vector<uint8_t> Serializer::load_kin_file(const std::string& filepath) {
 
     KinHeader header;
     in.read(reinterpret_cast<char*>(&header), sizeof(header));
+    header.device_id[sizeof(header.device_id) - 1] = '\0';
 
     uint32_t magic_number = le32toh(header.magic_number);
     uint32_t version = le32toh(header.version);
