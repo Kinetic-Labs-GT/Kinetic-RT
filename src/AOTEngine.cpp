@@ -26,11 +26,11 @@ std::string SmartAutotuner::profile_gemm(uintptr_t stream_ptr) {
     std::string best_variant = "";
     float best_time = 1e9f;
 
-    for (const auto& variant : variants) {
-        hipEvent_t start, stop;
-        CHECK_HIP(hipEventCreate(&start));
-        CHECK_HIP(hipEventCreate(&stop));
+    hipEvent_t start, stop;
+    CHECK_HIP(hipEventCreate(&start));
+    CHECK_HIP(hipEventCreate(&stop));
 
+    for (const auto& variant : variants) {
         CHECK_HIP(hipEventRecord(start, stream));
 
         // In a real implementation, we would launch the specific kernel variant here
@@ -46,10 +46,10 @@ std::string SmartAutotuner::profile_gemm(uintptr_t stream_ptr) {
             best_time = elapsed_ms;
             best_variant = variant.name;
         }
-
-        CHECK_HIP(hipEventDestroy(start));
-        CHECK_HIP(hipEventDestroy(stop));
     }
+
+    CHECK_HIP(hipEventDestroy(start));
+    CHECK_HIP(hipEventDestroy(stop));
 
     return best_variant;
 }
