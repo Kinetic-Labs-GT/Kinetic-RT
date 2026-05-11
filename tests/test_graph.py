@@ -41,6 +41,16 @@ def test_graph_capture_and_launch():
 
     print("Graph validation passed successfully!")
 
+def test_uninstantiated_launch():
+    wrapper = kinetic_rt.GraphWrapper()
+    stream_ptr = 1234
+    try:
+        wrapper.launch(stream_ptr, [])
+        assert False, "Expected RuntimeError due to uninstantiated graph"
+    except RuntimeError as e:
+        assert "not instantiated" in str(e).lower()
+    print("Uninstantiated Launch Test passed successfully!")
+
 def test_async_stress():
     wrapper = kinetic_rt.GraphWrapper()
     stream_ptr = 1234
@@ -63,5 +73,6 @@ def test_async_stress():
 
 if __name__ == "__main__":
     test_graph_capture_and_launch()
+    test_uninstantiated_launch()
     test_async_stress()
     print("All tests passed successfully!")
