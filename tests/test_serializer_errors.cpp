@@ -123,6 +123,19 @@ void test_hardware_mismatch() {
     remove(filepath.c_str());
 }
 
+void test_write_failure() {
+    Serializer s;
+    std::vector<uint8_t> empty_vec;
+    try {
+        s.save_kin_file("/invalid_dir_that_does_not_exist/test.kin", "gfx1100", 12345, empty_vec, empty_vec);
+        assert(false && "Should have thrown runtime_error for write failure");
+    } catch (const std::runtime_error& e) {
+        std::string msg = e.what();
+        assert(msg.find("Failed to open file for writing") != std::string::npos);
+        std::cout << "test_write_failure passed" << std::endl;
+    }
+}
+
 int main() {
     test_file_not_found();
     test_file_too_small();
@@ -130,6 +143,7 @@ int main() {
     test_offset_overflow();
     test_exceed_bounds();
     test_hardware_mismatch();
+    test_write_failure();
 
     std::cout << "All Serializer error tests passed!" << std::endl;
     return 0;
