@@ -98,6 +98,30 @@ void test_exceed_bounds() {
     remove(filepath.c_str());
 }
 
+void test_payload_bounds_check() {
+    Serializer s;
+    std::string filepath = "payload_bounds.kin";
+    KinHeader header;
+    std::memset(&header, 0, sizeof(header));
+    header.magic_number = htole32(0x4B494E00);
+    header.kernel_binaries_offset = htole64(sizeof(KinHeader));
+    header.kernel_binaries_size = htole64(10000);
+
+    std::vector<char> file_data(sizeof(KinHeader) + 50, 0);
+    std::memcpy(file_data.data(), &header, sizeof(KinHeader));
+
+    create_test_file(filepath, file_data.data(), file_data.size());
+    try {
+        s.load_kin_file(filepath);
+        assert(false && "Should have thrown runtime_error for exceeding bounds");
+    } catch (const std::runtime_error& e) {
+        std::string msg = e.what();
+        assert(msg.find("sizes exceed file bounds") != std::string::npos);
+        std::cout << "test_payload_bounds_check passed" << std::endl;
+    }
+    remove(filepath.c_str());
+}
+
 void test_hardware_mismatch() {
     Serializer s;
     std::string filepath = "hw_mismatch.kin";
@@ -129,6 +153,7 @@ int main() {
     test_bad_magic();
     test_offset_overflow();
     test_exceed_bounds();
+    test_payload_bounds_check();
     test_hardware_mismatch();
 
     std::cout << "All Serializer error tests passed!" << std::endl;
