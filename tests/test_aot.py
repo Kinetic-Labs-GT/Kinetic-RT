@@ -49,6 +49,38 @@ def test_serializer_error_handling():
         print(f"Caught expected RuntimeError: {e}")
         assert "Failed to open file for reading" in str(e)
 
+def test_bad_magic_number():
+    serializer = kinetic_rt.Serializer()
+    filepath = "bad_magic.kin"
+
+    # Create a malformed .kin file with a wrong magic number
+    import struct
+    # KinHeader struct layout (pack):
+    # uint32_t magic_number;
+    # uint32_t version;
+    # char device_id[256];
+    # uint64_t weights_hash;
+    # uint64_t op_graph_data_offset;
+    # uint64_t op_graph_data_size;
+    # uint64_t kernel_binaries_offset;
+    # uint64_t kernel_binaries_size;
+
+    # We will just write enough bytes to pass the size check, with a bad magic number.
+    with open(filepath, "wb") as f:
+        # Magic number is little endian 0x12345678 instead of 0x4B494E00
+        f.write(struct.pack("<I", 0x12345678))
+        f.write(b'\x00' * (256 + 4 + 8 * 5))
+
+    try:
+        serializer.load_kin_file(filepath)
+        assert False, "Should have raised RuntimeError for bad magic number"
+    except RuntimeError as e:
+        print(f"Caught expected RuntimeError: {e}")
+        assert "bad magic number" in str(e)
+    finally:
+        if os.path.exists(filepath):
+            os.remove(filepath)
+
 def test_aot_engine():
     engine = kinetic_rt.AOTEngine()
     filepath = "aot_model.kin"
@@ -68,5 +100,6 @@ def test_aot_engine():
 if __name__ == "__main__":
     test_serializer()
     test_serializer_error_handling()
+    test_bad_magic_number()
     test_aot_engine()
     print("All tests passed successfully!")
