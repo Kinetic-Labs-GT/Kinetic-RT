@@ -56,6 +56,12 @@ std::string SmartAutotuner::profile_gemm(uintptr_t stream_ptr) {
 
 // --- Serializer ---
 
+Serializer::Serializer() {
+    hipDeviceProp_t prop;
+    CHECK_HIP(hipGetDeviceProperties(&prop, 0)); // Assuming device 0
+    device_id_ = std::string(prop.gcnArchName);
+}
+
 void Serializer::save_kin_file(const std::string& filepath, const std::string& device_id, uint64_t weights_hash, const std::vector<uint8_t>& op_graph_data, const std::vector<uint8_t>& kernel_binaries) {
     std::ofstream out(filepath, std::ios::binary);
     if (!out) {
@@ -127,12 +133,8 @@ std::vector<uint8_t> Serializer::load_kin_file(const std::string& filepath) {
     }
 
     // Verify Hardware Mismatch
-    hipDeviceProp_t prop;
-    CHECK_HIP(hipGetDeviceProperties(&prop, 0)); // Assuming device 0
-    std::string current_device_id(prop.gcnArchName);
-
-    if (current_device_id != header.device_id) {
-        throw HardwareMismatch("Hardware mismatch: expected " + std::string(header.device_id) + " but got " + current_device_id);
+    if (device_id_ != header.device_id) {
+        throw HardwareMismatch("Hardware mismatch: expected " + std::string(header.device_id) + " but got " + device_id_);
     }
 
     // Skip op graph data for now, just read kernel binaries
@@ -165,10 +167,8 @@ void AOTEngine::compile_ahead_of_time(const std::string& output_filepath, uintpt
     std::string best_variant = autotuner_.profile_gemm(stream_ptr);
     std::cout << "Selected best GEMM variant: " << best_variant << std::endl;
 
-    // 2. Fetch current device properties
-    hipDeviceProp_t prop;
-    CHECK_HIP(hipGetDeviceProperties(&prop, 0));
-    std::string device_id(prop.gcnArchName);
+    // 2. Fetch current device properties (cached)
+    const std::string& device_id = serializer_.get_device_id();
 
     // 3. Serialize to .kin
     std::vector<uint8_t> dummy_op_graph_data = {0x01, 0x02, 0x03}; // Mock data

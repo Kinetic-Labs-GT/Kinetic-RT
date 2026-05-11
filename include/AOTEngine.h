@@ -48,12 +48,19 @@ public:
 
 class Serializer {
 public:
+    Serializer();
+
     // Serializes the graph recipe and kernel binaries into a single .kin file
     void save_kin_file(const std::string& filepath, const std::string& device_id, uint64_t weights_hash, const std::vector<uint8_t>& op_graph_data, const std::vector<uint8_t>& kernel_binaries);
 
     // Reads the .kin file and validates hardware compatibility
     // Returns the kernel binaries
     std::vector<uint8_t> load_kin_file(const std::string& filepath);
+
+    const std::string& get_device_id() const { return device_id_; }
+
+private:
+    std::string device_id_;
 };
 
 class AOTEngine {
