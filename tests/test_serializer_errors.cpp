@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cstring>
 #include <endian.h>
+#include <chrono>
 
 void create_test_file(const std::string& filepath, const void* data, size_t size) {
     std::ofstream out(filepath, std::ios::binary);
@@ -126,8 +127,12 @@ void test_hardware_mismatch() {
 void test_write_failure() {
     Serializer s;
     std::vector<uint8_t> empty_vec;
+    // Generate a pseudo-random path based on timestamp
+    std::string timestamp = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+    std::string bad_path = "/tmp/invalid_dir_" + timestamp + "/test.kin";
+
     try {
-        s.save_kin_file("/invalid_dir_that_does_not_exist/test.kin", "gfx1100", 12345, empty_vec, empty_vec);
+        s.save_kin_file(bad_path, "gfx1100", 12345, empty_vec, empty_vec);
         assert(false && "Should have thrown runtime_error for write failure");
     } catch (const std::runtime_error& e) {
         std::string msg = e.what();

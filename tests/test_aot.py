@@ -49,9 +49,12 @@ def test_serializer_error_handling():
         print(f"Caught expected RuntimeError: {e}")
         assert "Failed to open file for reading" in str(e)
 
+    import tempfile
+    import uuid
     # Test write failure
+    nonexistent_path = os.path.join(tempfile.gettempdir(), f"invalid_dir_{uuid.uuid4()}", "test.kin")
     try:
-        serializer.save_kin_file("/invalid_dir_that_does_not_exist/test.kin", "gfx1100", 12345, [], [])
+        serializer.save_kin_file(nonexistent_path, "gfx1100", 12345, [], [])
         assert False, "Should have raised RuntimeError for write failure"
     except RuntimeError as e:
         print(f"Caught expected RuntimeError: {e}")
