@@ -79,6 +79,28 @@ void test_offset_overflow() {
     remove(filepath.c_str());
 }
 
+void test_kernel_offset_overflow() {
+    Serializer s;
+    std::string filepath = "kernel_offset_overflow.kin";
+    KinHeader header;
+    std::memset(&header, 0, sizeof(header));
+    header.magic_number = htole32(0x4B494E00);
+    header.op_graph_data_offset = htole64(100);
+    header.op_graph_data_size = htole64(10);
+    header.kernel_binaries_offset = htole64(0xFFFFFFFFFFFFFFFF);
+    header.kernel_binaries_size = htole64(10);
+    create_test_file(filepath, &header, sizeof(header));
+    try {
+        s.load_kin_file(filepath);
+        assert(false && "Should have thrown runtime_error for offset overflow");
+    } catch (const std::runtime_error& e) {
+        std::string msg = e.what();
+        assert(msg.find("offset overflow") != std::string::npos);
+        std::cout << "test_kernel_offset_overflow passed" << std::endl;
+    }
+    remove(filepath.c_str());
+}
+
 void test_exceed_bounds() {
     Serializer s;
     std::string filepath = "exceed_bounds.kin";
@@ -139,8 +161,8 @@ void test_hardware_mismatch() {
 
     try {
         s.load_kin_file(filepath);
-        assert(false && "Should have thrown HardwareMismatch");
-    } catch (const HardwareMismatch& e) {
+        assert(false && "Should have thrown HardwareMismatchError");
+    } catch (const HardwareMismatchError& e) {
         std::string msg = e.what();
         assert(msg.find("Hardware mismatch") != std::string::npos);
         std::cout << "test_hardware_mismatch passed" << std::endl;
@@ -156,7 +178,7 @@ void test_write_failure() {
     std::string bad_path = "/tmp/invalid_dir_" + timestamp + "/test.kin";
 
     try {
-        s.save_kin_file(bad_path, "gfx1100", 12345, empty_vec, empty_vec);
+        s.save_kin_file(bad_path, "gfx1100", "ROCm_gfx1100", 12345, empty_vec, empty_vec);
         assert(false && "Should have thrown runtime_error for write failure");
     } catch (const std::runtime_error& e) {
         std::string msg = e.what();
@@ -170,6 +192,7 @@ int main() {
     test_file_too_small();
     test_bad_magic();
     test_offset_overflow();
+    test_kernel_offset_overflow();
     test_exceed_bounds();
     test_payload_bounds_check();
     test_hardware_mismatch();
