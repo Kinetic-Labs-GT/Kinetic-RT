@@ -59,6 +59,36 @@ void test_bad_magic() {
     remove(filepath.c_str());
 }
 
+void test_bad_magic_number_in_load() {
+    Serializer s;
+    std::string filepath = "missing_bad_magic.kin";
+    // write an invalid magic number to a file
+    uint32_t invalid_magic = htole32(0xDEADBEEF);
+    KinHeader header;
+    std::memset(&header, 0, sizeof(header));
+    header.magic_number = invalid_magic;
+    header.version = htole32(1);
+    header.op_graph_data_offset = htole64(sizeof(KinHeader));
+    header.op_graph_data_size = htole64(0);
+    header.kernel_binaries_offset = htole64(sizeof(KinHeader));
+    header.kernel_binaries_size = htole64(0);
+
+    std::ofstream out(filepath, std::ios::binary);
+    out.write(reinterpret_cast<const char*>(&header), sizeof(header));
+    out.close();
+
+    try {
+        // calls load_kin_file, checking for the runtime error
+        s.load_kin_file(filepath);
+        assert(false && "Should have thrown std::runtime_error for bad magic number");
+    } catch (const std::runtime_error& e) {
+        std::string msg = e.what();
+        assert(msg.find("bad magic number") != std::string::npos);
+        std::cout << "test_bad_magic_number_in_load passed" << std::endl;
+    }
+    remove(filepath.c_str());
+}
+
 void test_offset_overflow() {
     Serializer s;
     std::string filepath = "offset_overflow.kin";
@@ -139,8 +169,8 @@ void test_hardware_mismatch() {
 
     try {
         s.load_kin_file(filepath);
-        assert(false && "Should have thrown HardwareMismatch");
-    } catch (const HardwareMismatch& e) {
+        assert(false && "Should have thrown HardwareMismatchError");
+    } catch (const HardwareMismatchError& e) {
         std::string msg = e.what();
         assert(msg.find("Hardware mismatch") != std::string::npos);
         std::cout << "test_hardware_mismatch passed" << std::endl;
@@ -156,7 +186,7 @@ void test_write_failure() {
     std::string bad_path = "/tmp/invalid_dir_" + timestamp + "/test.kin";
 
     try {
-        s.save_kin_file(bad_path, "gfx1100", 12345, empty_vec, empty_vec);
+        s.save_kin_file(bad_path, "gfx1100", "ROCm_gfx1100", 12345, empty_vec, empty_vec);
         assert(false && "Should have thrown runtime_error for write failure");
     } catch (const std::runtime_error& e) {
         std::string msg = e.what();
@@ -169,6 +199,7 @@ int main() {
     test_file_not_found();
     test_file_too_small();
     test_bad_magic();
+    test_bad_magic_number_in_load();
     test_offset_overflow();
     test_exceed_bounds();
     test_payload_bounds_check();
