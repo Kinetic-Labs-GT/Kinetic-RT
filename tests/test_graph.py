@@ -1,4 +1,4 @@
-import kinetic_rt
+import python.kinetic_rt as kinetic_rt
 
 def test_graph_capture_and_launch():
     # Initialize wrapper

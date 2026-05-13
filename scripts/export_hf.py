@@ -6,7 +6,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import torch
 from transformers import AutoModelForCausalLM
-import kinetic_rt
+import python.kinetic_rt as kinetic_rt
 from python.kinetic_rt.fusion_forge import compile_and_serialize
 
 def export_model():

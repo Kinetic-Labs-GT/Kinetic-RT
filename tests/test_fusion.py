@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 import os
 from python.kinetic_rt.fusion_forge import compile_and_serialize
-import kinetic_rt
+import python.kinetic_rt as kinetic_rt
 
 def rms_norm_ref(x, weight, eps=1e-5):
     # PyTorch reference for RMSNorm

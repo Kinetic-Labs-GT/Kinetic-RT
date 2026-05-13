@@ -4,7 +4,7 @@ import os
 # Add root directory to python path for kinetic_rt
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import kinetic_rt
+import python.kinetic_rt as kinetic_rt
 import ctypes
 
 def run_inference():

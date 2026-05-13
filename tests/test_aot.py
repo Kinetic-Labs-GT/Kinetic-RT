@@ -1,4 +1,4 @@
-import kinetic_rt
+import python.kinetic_rt as kinetic_rt
 import os
 
 def test_serializer():

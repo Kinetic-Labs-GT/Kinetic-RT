@@ -6,7 +6,7 @@
 
 namespace py = pybind11;
 
-PYBIND11_MODULE(kinetic_rt, m) {
+PYBIND11_MODULE(_core, m) {
     m.doc() = "Kinetic-RT (ROCm Runtime) GraphWrapper";
 
     py::class_<GraphWrapper>(m, "GraphWrapper")

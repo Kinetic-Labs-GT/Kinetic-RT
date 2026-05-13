@@ -80,7 +80,7 @@ if __name__ == "__main__":
     unittest.main()
 
 
-import kinetic_rt
+import python.kinetic_rt as kinetic_rt
 
 class TestHardwareMismatchError(unittest.TestCase):
     def test_hardware_mismatch_exception_propagation(self):
