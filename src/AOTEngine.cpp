@@ -171,7 +171,7 @@ AOTEngine::~AOTEngine() {
     }
 }
 
-void AOTEngine::compile_ahead_of_time(const std::string& output_filepath, uintptr_t stream_ptr) {
+void AOTEngine::compile_ahead_of_time(const std::string& output_filepath, uintptr_t stream_ptr, const std::string& target_architecture) {
     std::lock_guard<std::recursive_mutex> lock(engine_mutex_);
     // 1. Profile and find best kernel
     std::string best_variant = autotuner_.profile_gemm(stream_ptr);
@@ -192,10 +192,7 @@ void AOTEngine::compile_ahead_of_time(const std::string& output_filepath, uintpt
     uint64_t dummy_weights_hash = 123456789;
 
 #ifdef __HIP_PLATFORM_NVIDIA__
-    std::string target_architecture = "CUDA_sm75";
     dummy_hsaco[18] = 0xBE; dummy_hsaco[19] = 0x00; // EM_CUDA
-#else
-    std::string target_architecture = "ROCm_gfx1100";
 #endif
 
     serializer_.save_kin_file(output_filepath, device_id, target_architecture, dummy_weights_hash, dummy_op_graph_data, dummy_hsaco);

@@ -73,7 +73,7 @@ public:
     ~AOTEngine();
 
     // Perform AOT compilation and tuning, save as .kin
-    void compile_ahead_of_time(const std::string& output_filepath, uintptr_t stream_ptr);
+    void compile_ahead_of_time(const std::string& output_filepath, uintptr_t stream_ptr, const std::string& target_architecture);
 
     // Load from .kin and initialize the engine
     void load_model(const std::string& filepath);

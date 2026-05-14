@@ -45,7 +45,7 @@ struct MockHipState {
 
     // For autotuner mock
     float mock_elapsed_time = 1.0f;
-    std::string mock_gcn_arch_name = "gfx1100";
+    std::string mock_gcn_arch_name = "cpu";
 
     void reset() {
         stream_capture_calls = 0;
@@ -67,7 +67,7 @@ struct MockHipState {
         is_graph_in_flight = false;
         in_flight_graph = nullptr;
         mock_elapsed_time = 1.0f;
-        mock_gcn_arch_name = "gfx1100";
+        mock_gcn_arch_name = "cpu";
     }
 };
 

@@ -1,39 +1,67 @@
 import python.kinetic_rt as kinetic_rt
 import os
+from python.kinetic_rt.hardware_probe import probe_hardware
 
 def test_serializer():
+    topology, backend, arch = probe_hardware()
+
+    # We must match the device_id that Serializer will check against.
+    # Serializer fetches its device_id from C++ `hipGetDeviceProperties` internally,
+    # which we've mocked in `mock_hip.h` to return "cpu" when running in headless CPU CI.
+    # So we should use the actual probed `arch` for saving the mock so that loading works,
+    # and only fallback for `backend` to satisfy `validate_elf_structure`'s prefix requirement.
+    device_id = arch
+
+    if backend == "CPU":
+        backend = "ROCm"
+
+    target_arch = f"{backend}_{arch}"
+
     serializer = kinetic_rt.Serializer()
     filepath = "test_model.kin"
-    device_id = "gfx1100"
     weights_hash = 123456789
     op_graph_data = [1, 2, 3]
 
-    # Mock hsaco that passes deep validation
+    # Mock binary that passes deep validation based on the actual detected backend
     kernel_binaries = [0] * 64
     kernel_binaries[0:4] = [0x7f, ord('E'), ord('L'), ord('F')]
     kernel_binaries[4] = 2
-    kernel_binaries[18:20] = [0xE0, 0x00]
+
+    if backend == "CUDA":
+        kernel_binaries[18:20] = [0xBE, 0x00] # EM_CUDA
+    else:
+        kernel_binaries[18:20] = [0xE0, 0x00] # EM_AMDGPU
 
     # Save file
-    serializer.save_kin_file(filepath, device_id, "ROCm_gfx1100", weights_hash, op_graph_data, kernel_binaries)
+    serializer.save_kin_file(filepath, device_id, target_arch, weights_hash, op_graph_data, kernel_binaries)
     assert os.path.exists(filepath)
 
     # Load file
     loaded_binaries = serializer.load_kin_file(filepath)
     assert loaded_binaries == kernel_binaries
 
-    # Try loading with a different hardware id mock
-    # The mock currently returns "gfx1100"
-    # So to trigger hardware mismatch, we'll save a file that expects "gfx942"
+    # Try loading with a different hardware id mock ("Poison Pill" Test)
     filepath_mismatch = "test_mismatch.kin"
-    serializer.save_kin_file(filepath_mismatch, "gfx942", "ROCm_gfx942", weights_hash, op_graph_data, kernel_binaries)
+    # Construct an intentionally wrong architecture for rejection testing
+    if backend == "CUDA":
+        wrong_device_id = "gfx1100"
+        wrong_target_arch = "ROCm_gfx1100"
+        kernel_binaries_mismatch = list(kernel_binaries)
+        kernel_binaries_mismatch[18:20] = [0xE0, 0x00] # EM_AMDGPU
+    else:
+        wrong_device_id = "sm75"
+        wrong_target_arch = "CUDA_sm75"
+        kernel_binaries_mismatch = list(kernel_binaries)
+        kernel_binaries_mismatch[18:20] = [0xBE, 0x00] # EM_CUDA
+
+    serializer.save_kin_file(filepath_mismatch, wrong_device_id, wrong_target_arch, weights_hash, op_graph_data, kernel_binaries_mismatch)
 
     try:
         serializer.load_kin_file(filepath_mismatch)
         assert False, "Should have raised HardwareMismatchError"
     except kinetic_rt.HardwareMismatchError as e:
         print(f"Caught expected HardwareMismatchError: {e}")
-        assert "expected gfx942 but got gfx1100" in str(e)
+        assert f"expected {wrong_device_id} but got {device_id}" in str(e)
 
     os.remove(filepath)
     os.remove(filepath_mismatch)
@@ -93,12 +121,22 @@ def test_bad_magic_number():
             os.remove(filepath)
 
 def test_aot_engine():
+    # In test_aot_engine, we must ensure we use a valid architecture prefix (CUDA or ROCm)
+    # because AOTEngine::validate_elf_structure explicitly expects these prefixes.
+    # We will pretend we are on the detected backend, or fallback to ROCm for headless.
+    topology, backend, arch = probe_hardware()
+    if backend == "CPU":
+        backend = "ROCm"
+        arch = "gfx1100"
+
+    target_arch = f"{backend}_{arch}"
+
     engine = kinetic_rt.AOTEngine()
     filepath = "aot_model.kin"
     stream_ptr = 1234
 
     # Compile
-    engine.compile_ahead_of_time(filepath, stream_ptr)
+    engine.compile_ahead_of_time(filepath, stream_ptr, target_arch)
     assert os.path.exists(filepath)
 
     # Load

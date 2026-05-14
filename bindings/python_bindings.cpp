@@ -32,10 +32,10 @@ PYBIND11_MODULE(_core, m) {
 
     py::class_<AOTEngine>(m, "AOTEngine")
         .def(py::init<>())
-        .def("compile_ahead_of_time", [](AOTEngine& self, const std::string& output_filepath, py::object stream_obj) {
-            self.compile_ahead_of_time(output_filepath, py::cast<uintptr_t>(stream_obj));
+        .def("compile_ahead_of_time", [](AOTEngine& self, const std::string& output_filepath, py::object stream_obj, const std::string& target_architecture) {
+            self.compile_ahead_of_time(output_filepath, py::cast<uintptr_t>(stream_obj), target_architecture);
         }, "Compile and autotune model to a .kin file",
-             py::arg("output_filepath"), py::arg("stream_obj"))
+             py::arg("output_filepath"), py::arg("stream_obj"), py::arg("target_architecture"))
         .def("load_model", &AOTEngine::load_model, "Load a compiled .kin model",
              py::arg("filepath"));
 
