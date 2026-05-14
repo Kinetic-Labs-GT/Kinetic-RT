@@ -57,6 +57,9 @@ private:
     // Registry of states currently executing on the GPU
     std::deque<InFlightState> in_flight_states_;
 
+    // Pool of available events for reuse
+    std::vector<hipEvent_t> event_pool_;
+
     // Mutex for thread safety
     std::recursive_mutex engine_mutex_;
 };

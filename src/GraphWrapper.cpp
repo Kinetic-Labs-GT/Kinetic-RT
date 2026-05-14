@@ -50,13 +50,18 @@ void GraphWrapper::invalidate() {
         CHECK_HIP(hipEventDestroy(state.event));
     }
     in_flight_states_.clear();
+
+    for (auto& event : event_pool_) {
+        CHECK_HIP(hipEventDestroy(event));
+    }
+    event_pool_.clear();
 }
 
 void GraphWrapper::cleanup_in_flight_states() {
     while (!in_flight_states_.empty()) {
         hipError_t status = hipEventQuery(in_flight_states_.front().event);
         if (status == hipSuccess) {
-            CHECK_HIP(hipEventDestroy(in_flight_states_.front().event));
+            event_pool_.push_back(in_flight_states_.front().event);
             in_flight_states_.pop_front();
         } else if (status == hipErrorNotReady) {
             break; // Still executing
@@ -151,7 +156,18 @@ void GraphWrapper::launch(std::vector<pybind11::object> stream_objs, std::vector
         hipStream_t stream = reinterpret_cast<hipStream_t>(stream_ptr);
 
         hipEvent_t event;
-        hipError_t err_create = hipEventCreate(&event);
+        hipError_t err_create = hipSuccess;
+        if (!event_pool_.empty()) {
+            event = event_pool_.back();
+            event_pool_.pop_back();
+        } else {
+#if defined(MOCK_HIP)
+            err_create = hipEventCreate(&event);
+#else
+            err_create = hipEventCreateWithFlags(&event, hipEventDisableTiming);
+#endif
+        }
+
         hipError_t err_record = hipSuccess;
         if (err_create == hipSuccess) {
             err_record = hipEventRecord(event, stream);
