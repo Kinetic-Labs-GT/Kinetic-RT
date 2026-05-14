@@ -178,11 +178,9 @@ void GraphWrapper::launch(std::vector<pybind11::object> stream_objs, std::vector
         } else {
             InFlightState state;
             state.event = event;
-            state.refs.reserve(buffers.size() + stream_objs.size());
+            state.refs.reserve(buffers.size() + 1);
             state.refs.emplace_back(stream_obj);
-            for (auto& item : buffers) {
-                state.refs.emplace_back(item);
-            }
+            state.refs.insert(state.refs.end(), buffers.begin(), buffers.end());
             in_flight_states_.emplace_back(std::move(state));
         }
 
