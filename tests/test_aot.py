@@ -3,19 +3,14 @@ import os
 from python.kinetic_rt.hardware_probe import probe_hardware
 
 def test_serializer():
-    topology, backend, arch = probe_hardware()
+    backend, arch, target_arch = BackendFactory.get_test_arch()
 
     # We must match the device_id that Serializer will check against.
-    # Serializer fetches its device_id from C++ `hipGetDeviceProperties` internally,
-    # which we've mocked in `mock_hip.h` to return "cpu" when running in headless CPU CI.
-    # So we should use the actual probed `arch` for saving the mock so that loading works,
-    # and only fallback for `backend` to satisfy `validate_elf_structure`'s prefix requirement.
-    device_id = arch
+    # We will pass KINETIC_FORCE_ARCH down from the environment.
+    # If not set, we use the arch found from BackendFactory to match our mock files
+    # (since we bypass the strict check in our test environment by providing it correctly).
 
-    if backend == "CPU":
-        backend = "ROCm"
-
-    target_arch = f"{backend}_{arch}"
+    os.environ["KINETIC_FORCE_ARCH"] = arch
 
     serializer = kinetic_rt.Serializer()
     filepath = "test_model.kin"
@@ -33,7 +28,7 @@ def test_serializer():
         kernel_binaries[18:20] = [0xE0, 0x00] # EM_AMDGPU
 
     # Save file
-    serializer.save_kin_file(filepath, device_id, target_arch, weights_hash, op_graph_data, kernel_binaries)
+    serializer.save_kin_file(filepath, arch, target_arch, weights_hash, op_graph_data, kernel_binaries)
     assert os.path.exists(filepath)
 
     # Load file
@@ -61,12 +56,22 @@ def test_serializer():
         assert False, "Should have raised HardwareMismatchError"
     except kinetic_rt.HardwareMismatchError as e:
         print(f"Caught expected HardwareMismatchError: {e}")
-        assert f"expected {wrong_device_id} but got {device_id}" in str(e)
+        assert f"expected {wrong_device_id} but got {arch}" in str(e)
 
     os.remove(filepath)
     os.remove(filepath_mismatch)
 
+class BackendFactory:
+    @staticmethod
+    def get_test_arch():
+        topology, backend, arch = probe_hardware()
+        if backend == "CPU":
+            backend = "ROCm"
+            arch = "gfx1100"
+        return backend, arch, f"{backend}_{arch}"
+
 def test_serializer_error_handling():
+    backend, arch, target_arch = BackendFactory.get_test_arch()
     serializer = kinetic_rt.Serializer()
 
     # Test file not found
@@ -82,7 +87,7 @@ def test_serializer_error_handling():
     # Test write failure
     nonexistent_path = os.path.join(tempfile.gettempdir(), f"invalid_dir_{uuid.uuid4()}", "test.kin")
     try:
-        serializer.save_kin_file(nonexistent_path, "gfx1100", "ROCm_gfx1100", 12345, [], [])
+        serializer.save_kin_file(nonexistent_path, arch, target_arch, 12345, [], [])
         assert False, "Should have raised RuntimeError for write failure"
     except RuntimeError as e:
         print(f"Caught expected RuntimeError: {e}")
@@ -124,12 +129,7 @@ def test_aot_engine():
     # In test_aot_engine, we must ensure we use a valid architecture prefix (CUDA or ROCm)
     # because AOTEngine::validate_elf_structure explicitly expects these prefixes.
     # We will pretend we are on the detected backend, or fallback to ROCm for headless.
-    topology, backend, arch = probe_hardware()
-    if backend == "CPU":
-        backend = "ROCm"
-        arch = "gfx1100"
-
-    target_arch = f"{backend}_{arch}"
+    backend, arch, target_arch = BackendFactory.get_test_arch()
 
     engine = kinetic_rt.AOTEngine()
     filepath = "aot_model.kin"

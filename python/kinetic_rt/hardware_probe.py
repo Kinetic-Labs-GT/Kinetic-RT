@@ -2,6 +2,11 @@ import subprocess
 import os
 
 def probe_hardware():
+    forced_arch = os.environ.get("KINETIC_FORCE_ARCH")
+    if forced_arch:
+        backend = "CUDA" if "sm" in forced_arch else "ROCm"
+        return "1x Overridden GPU", backend, forced_arch
+
     # If MOCK_HIP is defined or we are in a testing environment without GPUs, mock it
     # We can check for nvidia-smi or rocm-smi
     try:

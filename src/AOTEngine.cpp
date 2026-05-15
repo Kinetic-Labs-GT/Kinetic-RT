@@ -57,9 +57,14 @@ std::string SmartAutotuner::profile_gemm(uintptr_t stream_ptr) {
 // --- Serializer ---
 
 Serializer::Serializer() {
-    hipDeviceProp_t prop;
-    CHECK_HIP(hipGetDeviceProperties(&prop, 0)); // Assuming device 0
-    device_id_ = std::string(prop.gcnArchName);
+    const char* forced_arch = std::getenv("KINETIC_FORCE_ARCH");
+    if (forced_arch != nullptr && std::strlen(forced_arch) > 0) {
+        device_id_ = std::string(forced_arch);
+    } else {
+        hipDeviceProp_t prop;
+        CHECK_HIP(hipGetDeviceProperties(&prop, 0)); // Assuming device 0
+        device_id_ = std::string(prop.gcnArchName);
+    }
 }
 
 void Serializer::save_kin_file(const std::string& filepath, const std::string& device_id, const std::string& target_architecture, uint64_t weights_hash, const std::vector<uint8_t>& op_graph_data, const std::vector<uint8_t>& kernel_binaries) {
