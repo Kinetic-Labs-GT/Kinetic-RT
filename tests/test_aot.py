@@ -66,8 +66,8 @@ class BackendFactory:
     def get_test_arch():
         topology, backend, arch = probe_hardware()
         if backend == "CPU":
-            backend = "ROCm"
-            arch = "gfx1100"
+            backend = "CPU"
+            arch = "CPU"
         return backend, arch, f"{backend}_{arch}"
 
 def test_serializer_error_handling():

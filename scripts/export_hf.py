@@ -9,7 +9,13 @@ from transformers import AutoModelForCausalLM
 import python.kinetic_rt as kinetic_rt
 from python.kinetic_rt.fusion_forge import compile_and_serialize
 
+import argparse
+
 def export_model():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--tp", type=int, default=2, help="Tensor parallelism degree")
+    args = parser.parse_args()
+
     model_id = "HuggingFaceTB/SmolLM2-135M"
     print(f"Downloading {model_id}...")
 
@@ -17,8 +23,12 @@ def export_model():
     model = AutoModelForCausalLM.from_pretrained(model_id)
     state_dict = model.state_dict()
 
-    print("Applying Tensor Parallelism (TP=2)...")
-    tp_degree = 2
+    print(f"Applying Tensor Parallelism (TP={args.tp})...")
+    tp_degree = args.tp
+
+    actual_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    if tp_degree > 1 and actual_gpus < tp_degree:
+        raise RuntimeError(f"Requested TP={tp_degree}, but only found {actual_gpus} GPUs.")
 
     sharded_weights = []
 

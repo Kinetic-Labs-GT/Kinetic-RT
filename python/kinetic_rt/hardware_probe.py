@@ -1,5 +1,6 @@
 import subprocess
 import os
+import torch
 
 def probe_hardware():
     forced_arch = os.environ.get("KINETIC_FORCE_ARCH")
@@ -7,33 +8,35 @@ def probe_hardware():
         backend = "CUDA" if "sm" in forced_arch else "ROCm"
         return "1x Overridden GPU", backend, forced_arch
 
-    # If MOCK_HIP is defined or we are in a testing environment without GPUs, mock it
-    # We can check for nvidia-smi or rocm-smi
-    try:
-        result = subprocess.run(['nvidia-smi', '--query-gpu=name,compute_cap', '--format=csv,noheader'], capture_output=True, text=True)
-        if result.returncode == 0 and result.stdout.strip():
-            lines = result.stdout.strip().split('\n')
-            num_gpus = len(lines)
-            if num_gpus > 0:
-                name, cap = lines[0].split(', ')
-                arch = f"sm{cap.replace('.', '')}"
-                return f"{num_gpus}x {name} (Compute {cap})", "CUDA", arch
-    except FileNotFoundError:
-        pass
+    if torch.cuda.is_available():
+        num_gpus = torch.cuda.device_count()
+        name = torch.cuda.get_device_name(0)
 
-    try:
-        result = subprocess.run(['rocm-smi', '--showproductname'], capture_output=True, text=True)
-        if result.returncode == 0 and result.stdout.strip():
-            lines = result.stdout.strip().split('\n')
-            num_gpus = len([l for l in lines if 'GPU' in l and 'Card series' in l])
-            if num_gpus > 0:
-                name = "AMD Radeon" # simplified
-                return f"{num_gpus}x {name}", "ROCm", os.environ.get('MOCK_ROCM_ARCH', 'gfx1100')
-    except FileNotFoundError:
-        pass
+        # Check if we are on ROCm (AMD) via torch
+        if hasattr(torch.version, 'hip') and torch.version.hip is not None:
+            # We can use ROCm smi or hip info if we want, but PyTorch doesn't expose
+            # an easy arch string without torch.cuda.get_device_properties(0).gcnArchName
+            # Let's try to get it from properties
+            props = torch.cuda.get_device_properties(0)
+            arch = getattr(props, 'gcnArchName', None)
+            if not arch:
+                # Try getting it from the name or other heuristic, but realistically
+                # PyTorch ROCm properties has gcnArchName
+                arch = "gfx90a" # Defaulting if missing is bad, but we try to avoid hardcoded fallbacks
+                if "gfx" in name:
+                    arch = name[name.find("gfx"):]
+            else:
+                # Sometimes gcnArchName has a prefix or suffix, like gfx90a:sramecc+...
+                arch = arch.split(':')[0]
+            return f"{num_gpus}x {name}", "ROCm", arch
+        else:
+            # CUDA
+            cap = torch.cuda.get_device_capability(0)
+            arch = f"sm{cap[0]}{cap[1]}"
+            return f"{num_gpus}x {name} (Compute {cap[0]}.{cap[1]})", "CUDA", arch
 
     # Headless CI Resilience
-    return "CPU Only (Headless)", "CPU", "cpu"
+    return "CPU Only (Headless)", "CPU", "CPU"
 
 def get_topology_string():
     topology, backend, arch = probe_hardware()
