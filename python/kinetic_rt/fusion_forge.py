@@ -176,8 +176,8 @@ def compile_and_serialize(engine, serializer, output_filepath, device_id=None, *
     topology, backend, arch = probe_hardware()
 
     if backend == "CPU":
-        backend = "ROCm"
-        arch = "gfx1100"
+        backend = "CPU"
+        arch = "CPU"
 
     # Set the target architecture based on backend
     target_architecture = f"{backend}_{arch}"
