@@ -24,6 +24,16 @@ if not hasattr(torch, "version"):
     torch.version = ModuleType("torch.version")
 if not hasattr(torch.version, "hip"):
     torch.version.hip = None
+if not hasattr(torch.cuda, "is_available"):
+    torch.cuda.is_available = lambda: False
+if not hasattr(torch.cuda, "device_count"):
+    torch.cuda.device_count = lambda: 0
+if not hasattr(torch.cuda, "get_device_name"):
+    torch.cuda.get_device_name = lambda *_: ""
+if not hasattr(torch.cuda, "get_device_capability"):
+    torch.cuda.get_device_capability = lambda *_: (0, 0)
+if not hasattr(torch.cuda, "get_device_properties"):
+    torch.cuda.get_device_properties = lambda *_: ModuleType("props")
 
 class TestHardwareProbe(unittest.TestCase):
     @classmethod
