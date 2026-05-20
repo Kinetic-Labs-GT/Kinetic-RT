@@ -139,7 +139,6 @@ void GraphWrapper::launch(std::vector<pybind11::object> stream_objs, std::vector
             hipStream_t stream = reinterpret_cast<hipStream_t>(stream_ptr);
 
             workers.emplace_back([this, stream]() {
-                std::lock_guard<std::recursive_mutex> thread_lock(engine_mutex_);
                 CHECK_HIP(hipGraphLaunch(graph_exec_, stream));
             });
         }

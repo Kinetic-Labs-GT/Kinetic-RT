@@ -1,10 +1,29 @@
-import sys
 import os
+import sys
 import unittest
-from unittest.mock import patch, MagicMock
 from types import ModuleType
+from unittest.mock import MagicMock, patch
 
-import torch
+try:
+    import torch
+except ImportError:
+    torch = ModuleType("torch")
+    torch.Tensor = type("Tensor", (), {})
+    torch.cuda = ModuleType("torch.cuda")
+    torch.version = ModuleType("torch.version")
+    torch.version.hip = None
+    sys.modules["torch"] = torch
+    sys.modules["torch.cuda"] = torch.cuda
+    sys.modules["torch.version"] = torch.version
+
+if not hasattr(torch, "Tensor"):
+    torch.Tensor = type("Tensor", (), {})
+if not hasattr(torch, "cuda"):
+    torch.cuda = ModuleType("torch.cuda")
+if not hasattr(torch, "version"):
+    torch.version = ModuleType("torch.version")
+if not hasattr(torch.version, "hip"):
+    torch.version.hip = None
 
 class TestHardwareProbe(unittest.TestCase):
     @classmethod
@@ -124,3 +143,7 @@ class TestHardwareProbe(unittest.TestCase):
         with patch('python.kinetic_rt.hardware_probe.probe_hardware', return_value=("CPU Only (Headless)", "CPU", "CPU")):
             result = get_topology_string()
             self.assertEqual(result, "[Kinetic-RT] Hardware Detected: CPU Only (Headless)")
+
+
+if __name__ == '__main__':
+    unittest.main()
