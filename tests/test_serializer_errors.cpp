@@ -200,6 +200,53 @@ void test_hardware_mismatch() {
     remove(filepath.c_str());
 }
 
+void test_hardware_mismatch_short_arch() {
+    Serializer s;
+    std::string filepath = "hw_mismatch_short.kin";
+    KinHeader header;
+    std::memset(&header, 0, sizeof(header));
+    header.magic_number = htole32(0x4B494E00);
+
+    // Provide a valid matching device_id so we pass the first hardware check
+    std::strncpy(header.device_id, "correct_hw", sizeof(header.device_id) - 1);
+
+    // Provide a short target_architecture that would trigger out_of_range if not fixed
+    std::strncpy(header.target_architecture, "CPU", sizeof(header.target_architecture) - 1);
+
+    header.kernel_binaries_offset = htole64(sizeof(KinHeader));
+    // Provide a small dummy binary to pass offset checks
+    header.kernel_binaries_size = htole64(64);
+
+    std::vector<uint8_t> fake_binary(64, 0);
+    // Add valid ELF header to bypass early ELF validation checks
+    fake_binary[0] = 0x7f;
+    fake_binary[1] = 'E';
+    fake_binary[2] = 'L';
+    fake_binary[3] = 'F';
+    fake_binary[4] = 2; // 64-bit
+
+    std::ofstream out(filepath, std::ios::binary);
+    out.write(reinterpret_cast<const char*>(&header), sizeof(header));
+    out.write(reinterpret_cast<const char*>(fake_binary.data()), fake_binary.size());
+    out.close();
+
+    global_mock_hip_state.mock_gcn_arch_name = "correct_hw";
+
+    AOTEngine engine;
+    try {
+        engine.load_model(filepath);
+        assert(false && "Should have thrown HardwareMismatchError for short architecture");
+    } catch (const HardwareMismatchError& e) {
+        std::string msg = e.what();
+        assert(msg.find("Hardware mismatch") != std::string::npos);
+        std::cout << "test_hardware_mismatch_short_arch passed" << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "Caught unexpected exception: " << e.what() << std::endl;
+        assert(false && "Should have thrown HardwareMismatchError");
+    }
+    remove(filepath.c_str());
+}
+
 void test_write_failure() {
     Serializer s;
     std::vector<uint8_t> empty_vec;
@@ -227,6 +274,7 @@ int main() {
     test_exceed_bounds();
     test_payload_bounds_check();
     test_hardware_mismatch();
+    test_hardware_mismatch_short_arch();
     test_write_failure();
 
     std::cout << "All Serializer error tests passed!" << std::endl;

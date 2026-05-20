@@ -240,7 +240,7 @@ void AOTEngine::validate_elf_structure(const std::vector<uint8_t>& binary_data, 
     uint16_t expected_em = 0xE0; // EM_AMDGPU (224)
 #endif
 
-    if (target_architecture.substr(0, 4) != expected_prefix) {
+    if (target_architecture.length() < 4 || target_architecture.substr(0, 4) != expected_prefix) {
         throw HardwareMismatchError("Hardware mismatch: expected target architecture starting with " + expected_prefix + " but found " + target_architecture);
     }
 
