@@ -1,0 +1,37 @@
+import unittest
+import sys
+from types import ModuleType
+from unittest.mock import patch
+
+if "torch" not in sys.modules:
+    torch = ModuleType("torch")
+    torch.Tensor = type("Tensor", (), {})
+    sys.modules["torch"] = torch
+else:
+    # If already loaded, make sure Tensor exists
+    if not hasattr(sys.modules["torch"], "Tensor"):
+        sys.modules["torch"].Tensor = type("Tensor", (), {})
+
+from python.kinetic_rt.hardware_probe import get_topology_string
+
+class TestHardwareProbe(unittest.TestCase):
+    @patch('python.kinetic_rt.hardware_probe.probe_hardware')
+    def test_get_topology_string_cpu(self, mock_probe):
+        mock_probe.return_value = ("CPU Only (Headless)", "CPU", "CPU")
+        result = get_topology_string()
+        self.assertEqual(result, "[Kinetic-RT] Hardware Detected: CPU Only (Headless)")
+
+    @patch('python.kinetic_rt.hardware_probe.probe_hardware')
+    def test_get_topology_string_cuda(self, mock_probe):
+        mock_probe.return_value = ("1x Overridden GPU", "CUDA", "sm75")
+        result = get_topology_string()
+        self.assertEqual(result, "[Kinetic-RT Init] Detected Topology: 1x Overridden GPU | Backend: CUDA | Arch: sm75")
+
+    @patch('python.kinetic_rt.hardware_probe.probe_hardware')
+    def test_get_topology_string_rocm(self, mock_probe):
+        mock_probe.return_value = ("4x AMD Radeon", "ROCm", "gfx90a")
+        result = get_topology_string()
+        self.assertEqual(result, "[Kinetic-RT Init] Detected Topology: 4x AMD Radeon | Backend: ROCm | Arch: gfx90a")
+
+if __name__ == '__main__':
+    unittest.main()
