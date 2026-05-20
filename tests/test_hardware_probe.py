@@ -85,22 +85,26 @@ class TestHardwareProbe(unittest.TestCase):
 
     @patch('torch.cuda.is_available', return_value=True)
     @patch('torch.cuda.device_count', return_value=2)
-    @patch('torch.cuda.get_device_name', return_value='Tesla V100-SXM2-16GB')
+    @patch('torch.cuda.get_device_name')
     @patch('torch.cuda.get_device_capability', return_value=(7, 0))
     def test_probe_hardware_cuda(self, mock_get_device_capability, mock_get_device_name, mock_device_count, mock_is_available):
+        device_id = 0
+        mock_get_device_name.side_effect = lambda idx: f"GPU-{idx}"
         # ensure we're not on ROCm (hasattr torch.version.hip is False or None)
         with patch('torch.version') as mock_version:
             mock_version.hip = None
             topology, backend, arch = probe_hardware()
-            self.assertEqual(topology, "2x Tesla V100-SXM2-16GB (Compute 7.0)")
+            self.assertEqual(topology, f"2x {torch.cuda.get_device_name(device_id)} (Compute 7.0)")
             self.assertEqual(backend, "CUDA")
             self.assertEqual(arch, "sm70")
 
     @patch('torch.cuda.is_available', return_value=True)
     @patch('torch.cuda.device_count', return_value=1)
-    @patch('torch.cuda.get_device_name', return_value='AMD Radeon RX 7900 XTX')
+    @patch('torch.cuda.get_device_name')
     @patch('torch.cuda.get_device_properties')
     def test_probe_hardware_rocm_with_props(self, mock_get_device_properties, mock_get_device_name, mock_device_count, mock_is_available):
+        device_id = 0
+        mock_get_device_name.side_effect = lambda idx: f"GPU-{idx}"
         mock_props = MagicMock()
         mock_props.gcnArchName = 'gfx1100:sramecc+'
         mock_get_device_properties.return_value = mock_props
@@ -108,15 +112,17 @@ class TestHardwareProbe(unittest.TestCase):
         with patch('torch.version') as mock_version:
             mock_version.hip = '5.7.0'
             topology, backend, arch = probe_hardware()
-            self.assertEqual(topology, "1x AMD Radeon RX 7900 XTX")
+            self.assertEqual(topology, f"1x {torch.cuda.get_device_name(device_id)}")
             self.assertEqual(backend, "ROCm")
             self.assertEqual(arch, "gfx1100")
 
     @patch('torch.cuda.is_available', return_value=True)
     @patch('torch.cuda.device_count', return_value=1)
-    @patch('torch.cuda.get_device_name', return_value='AMD Radeon RX gfx906')
+    @patch('torch.cuda.get_device_name')
     @patch('torch.cuda.get_device_properties')
     def test_probe_hardware_rocm_fallback_name(self, mock_get_device_properties, mock_get_device_name, mock_device_count, mock_is_available):
+        device_id = 0
+        mock_get_device_name.side_effect = lambda idx: "GPU gfx906"
         mock_props = MagicMock()
         del mock_props.gcnArchName
         mock_get_device_properties.return_value = mock_props
@@ -124,15 +130,17 @@ class TestHardwareProbe(unittest.TestCase):
         with patch('torch.version') as mock_version:
             mock_version.hip = '5.7.0'
             topology, backend, arch = probe_hardware()
-            self.assertEqual(topology, "1x AMD Radeon RX gfx906")
+            self.assertEqual(topology, f"1x {torch.cuda.get_device_name(device_id)}")
             self.assertEqual(backend, "ROCm")
             self.assertEqual(arch, "gfx906")
 
     @patch('torch.cuda.is_available', return_value=True)
     @patch('torch.cuda.device_count', return_value=1)
-    @patch('torch.cuda.get_device_name', return_value='Unknown AMD GPU')
+    @patch('torch.cuda.get_device_name')
     @patch('torch.cuda.get_device_properties')
     def test_probe_hardware_rocm_fallback_default(self, mock_get_device_properties, mock_get_device_name, mock_device_count, mock_is_available):
+        device_id = 0
+        mock_get_device_name.side_effect = lambda idx: f"GPU-{idx}"
         mock_props = MagicMock()
         del mock_props.gcnArchName
         mock_get_device_properties.return_value = mock_props
@@ -140,7 +148,7 @@ class TestHardwareProbe(unittest.TestCase):
         with patch('torch.version') as mock_version:
             mock_version.hip = '5.7.0'
             topology, backend, arch = probe_hardware()
-            self.assertEqual(topology, "1x Unknown AMD GPU")
+            self.assertEqual(topology, f"1x {torch.cuda.get_device_name(device_id)}")
             self.assertEqual(backend, "ROCm")
             self.assertEqual(arch, "gfx90a")
 
