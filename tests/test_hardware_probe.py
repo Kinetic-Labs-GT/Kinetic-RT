@@ -4,19 +4,30 @@ import unittest
 from unittest.mock import patch, MagicMock
 from types import ModuleType
 
-# Mock the core module properly
-core_mock = ModuleType('python.kinetic_rt._core')
-core_mock.AOTEngine = MagicMock()
-core_mock.GraphWrapper = MagicMock()
-core_mock.Serializer = MagicMock()
-core_mock.Communicator = MagicMock()
-core_mock.HardwareMismatchError = Exception
-sys.modules['python.kinetic_rt._core'] = core_mock
-
 import torch
-from python.kinetic_rt.hardware_probe import probe_hardware, get_topology_string
 
 class TestHardwareProbe(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # We patch sys.modules inside tests rather than globally to prevent leaking
+        cls.core_mock = ModuleType('python.kinetic_rt._core')
+        cls.core_mock.AOTEngine = MagicMock()
+        cls.core_mock.GraphWrapper = MagicMock()
+        cls.core_mock.Serializer = MagicMock()
+        cls.core_mock.Communicator = MagicMock()
+        cls.core_mock.HardwareMismatchError = Exception
+
+        cls.sys_modules_patcher = patch.dict(sys.modules, {'python.kinetic_rt._core': cls.core_mock})
+        cls.sys_modules_patcher.start()
+
+        # Import the module to test AFTER the mock is in place
+        global probe_hardware, get_topology_string
+        from python.kinetic_rt.hardware_probe import probe_hardware, get_topology_string
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.sys_modules_patcher.stop()
+
     def setUp(self):
         # Clear environment for tests
         if 'KINETIC_FORCE_ARCH' in os.environ:
