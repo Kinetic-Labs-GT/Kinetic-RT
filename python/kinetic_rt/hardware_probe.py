@@ -20,11 +20,7 @@ def probe_hardware():
             props = torch.cuda.get_device_properties(0)
             arch = getattr(props, 'gcnArchName', None)
             if not arch:
-                # Try getting it from the name or other heuristic, but realistically
-                # PyTorch ROCm properties has gcnArchName
-                arch = "gfx90a" # Defaulting if missing is bad, but we try to avoid hardcoded fallbacks
-                if "gfx" in name:
-                    arch = name[name.find("gfx"):]
+                raise RuntimeError("Architecture could not be dynamically probed.")
             else:
                 # Sometimes gcnArchName has a prefix or suffix, like gfx90a:sramecc+...
                 arch = arch.split(':')[0]

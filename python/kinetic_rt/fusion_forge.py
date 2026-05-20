@@ -148,6 +148,15 @@ def fused_rmsnorm_qkv_rope(
 class TritonCompilationError(Exception):
     pass
 
+class IRValidationError(Exception):
+    pass
+
+def _validate_ir(ir):
+    # Dummy IR validation function
+    if not ir:
+        raise IRValidationError("IR is empty.")
+    return True
+
 def validate_compilation(compiled_binary, backend):
     if not compiled_binary:
         raise TritonCompilationError("Triton compilation yielded an empty binary.")
@@ -166,7 +175,11 @@ def validate_compilation(compiled_binary, backend):
     elif backend == "ROCm" and compiled_binary[18:20] != b"\xE0\x00":
         raise TritonCompilationError("Triton binary architecture is not AMDGPU.")
 
+import os
+import logging
 from .hardware_probe import probe_hardware
+
+logger = logging.getLogger(__name__)
 
 def compile_and_serialize(engine, serializer, output_filepath, device_id=None, **kwargs):
     """
@@ -181,37 +194,36 @@ def compile_and_serialize(engine, serializer, output_filepath, device_id=None, *
 
     # Set the target architecture based on backend
     target_architecture = f"{backend}_{arch}"
+    if device_id is None:
+        device_id = arch
 
-    if backend == "CUDA":
-        # Mock PTX/CUBIN ELF compilation
+    ir = kwargs.get("ir", "dummy_ir")
+    try:
+        _validate_ir(ir)
+    except IRValidationError as e:
+        logger.error(f"IR Validation failed: {e}")
+        raise RuntimeError(f"Compilation aborted due to IR validation failure: {e}")
+
+    # Integrate actual Triton compilation or isolated mock
+    if os.environ.get("MOCK_HIP") == "1":
+        logger.debug("Executing mock compilation for CI testing.")
         compiled_binary = bytearray(64)
         compiled_binary[0:4] = b"\x7fELF"
         compiled_binary[4] = 2 # 64-bit class
-        # EM_CUDA is 190 (0xBE)
-        compiled_binary[18] = 0xBE
-        compiled_binary[19] = 0x00
+        if backend == "CUDA":
+            compiled_binary[18:20] = b"\xBE\x00" # EM_CUDA
+        else:
+            compiled_binary[18:20] = b"\xE0\x00" # EM_AMDGPU
         compiled_binary = bytes(compiled_binary)
-        if device_id is None:
-            device_id = arch
+
+        weights_hash = kwargs.get("weights_hash", 987654321)
+        op_graph_data = kwargs.get("op_graph_data", [10, 20, 30])
     else:
-        # Mock HSACO ELF compilation
-        compiled_binary = bytearray(64)
-        compiled_binary[0:4] = b"\x7fELF"
-        compiled_binary[4] = 2 # 64-bit class
-        # EM_AMDGPU is 0xE0
-        compiled_binary[18] = 0xE0
-        compiled_binary[19] = 0x00
-        compiled_binary = bytes(compiled_binary)
-        if device_id is None:
-            device_id = arch
+        raise RuntimeError("Actual Triton compilation pipeline not fully implemented. Run with MOCK_HIP=1 for CI testing.")
 
     # Guardrail check - in a real scenario we'd branch the validation
     # For CI, we just skip detailed validation to simplify, or adjust the validator.
 
-    # Dummy weights hash and op graph
-    weights_hash = kwargs.get("weights_hash", 987654321)
-    op_graph_data = kwargs.get("op_graph_data", [10, 20, 30]) # Representing our fused op node
-
     # Serialize to .kin
     serializer.save_kin_file(output_filepath, device_id, target_architecture, weights_hash, op_graph_data, list(compiled_binary))
-    print(f"Fused kernel compiled and serialized to {output_filepath}")
+    logger.info(f"Fused kernel compiled and serialized to {output_filepath}")

@@ -27,12 +27,12 @@ To run the end-to-end extraction, compilation, and execution pipeline:
 
 1. **Export and Serialize the Model:**
    ```bash
-   python scripts/export_hf.py --tp 1
+   python scripts/export_hf.py --tp 1 --output_dir ./models
    ```
    *This shards weights logically, compiles the Triton fusion ops for your physical architecture, and serializes the state to a `.kin` artifact.*
 
 2. **Run Inference:**
    ```bash
-   PYTHONPATH=. python scripts/run_first_light.py
+   PYTHONPATH=. python scripts/run_first_light.py --model_dir ./models
    ```
    *This bootstraps the C++ Kinetic runtime, mounts the serialized model, allocates managed memory buffers, and executes the highly optimized graph.*

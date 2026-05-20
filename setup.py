@@ -16,6 +16,18 @@ class get_pybind_include(object):
 
 # For a real ROCm environment, we'd include actual HIP paths.
 # Since we are setting up a mock build for CI/testing without ROCm, we'll configure it differently.
+
+try:
+    import torch
+    if torch.cuda.is_available():
+        compute_cap = torch.cuda.get_device_capability()
+    else:
+        compute_cap = None
+except Exception:
+    import warnings
+    warnings.warn("PyTorch is not installed or CUDA is unavailable. Falling back to default mock/PTX compiler flags. Please install PyTorch for native hardware compilation.")
+    compute_cap = None
+
 mock_hip = os.environ.get("MOCK_HIP", "1") == "1"
 
 macros = []
@@ -92,6 +104,11 @@ setup(
     description='GraphWrapper using HIP Graphs',
     ext_modules=ext_modules,
     setup_requires=['pybind11>=2.5.0'],
+    install_requires=[
+        'torch',
+        'triton',
+        'transformers',
+    ],
     cmdclass={'build_ext': BuildExt},
     zip_safe=False,
 )

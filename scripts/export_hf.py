@@ -10,20 +10,25 @@ import python.kinetic_rt as kinetic_rt
 from python.kinetic_rt.fusion_forge import compile_and_serialize
 
 import argparse
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def export_model():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tp", type=int, default=2, help="Tensor parallelism degree")
+    parser.add_argument("--output_dir", required=True, type=str, help="Output directory for the serialized model")
     args = parser.parse_args()
 
     model_id = "HuggingFaceTB/SmolLM2-135M"
-    print(f"Downloading {model_id}...")
+    logger.info(f"Downloading {model_id}...")
 
     # We will just load the state_dict
     model = AutoModelForCausalLM.from_pretrained(model_id)
     state_dict = model.state_dict()
 
-    print(f"Applying Tensor Parallelism (TP={args.tp})...")
+    logger.info(f"Applying Tensor Parallelism (TP={args.tp})...")
     tp_degree = args.tp
 
     actual_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
@@ -47,20 +52,22 @@ def export_model():
             chunks = torch.chunk(tensor, tp_degree, dim=1)
             sharded_weights.append(chunks)
 
-    print(f"Successfully sharded weights into {tp_degree} domains.")
+    logger.info(f"Successfully sharded weights into {tp_degree} domains.")
 
     # AOT Compilation
-    print("Executing AOT Compilation with Auto-Discovery...")
+    logger.info("Executing AOT Compilation with Auto-Discovery...")
     engine = kinetic_rt.AOTEngine()
     serializer = kinetic_rt.Serializer()
 
-    output_filepath = "smollm_135m_tp2.kin"
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
+    output_filepath = os.path.join(args.output_dir, f"smollm_135m_tp{tp_degree}.kin")
 
     # Passing the dummy tensor/graphs via kwargs for our fusion_forge mock compile
     # In a real environment, we'd pass the actual sharded_weights into the compiler
     compile_and_serialize(engine, serializer, output_filepath, tensor_parallel_degree=tp_degree)
 
-    print(f"End-to-End Export Complete: {output_filepath}")
+    logger.info(f"End-to-End Export Complete: {output_filepath}")
 
 if __name__ == "__main__":
     export_model()

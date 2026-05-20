@@ -200,12 +200,14 @@ void test_hardware_mismatch() {
     remove(filepath.c_str());
 }
 
+#include <filesystem>
+
 void test_write_failure() {
     Serializer s;
     std::vector<uint8_t> empty_vec;
     // Generate a pseudo-random path based on timestamp
     std::string timestamp = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
-    std::string bad_path = "/tmp/invalid_dir_" + timestamp + "/test.kin";
+    std::string bad_path = std::filesystem::temp_directory_path().string() + "/invalid_dir_" + timestamp + "/test.kin";
 
     try {
         s.save_kin_file(bad_path, "gfx1100", "ROCm_gfx1100", 12345, empty_vec, empty_vec);
