@@ -10,8 +10,10 @@ except ImportError:
     torch.Tensor = type("Tensor", (), {})
     sys.modules["torch"] = torch
 
-if not hasattr(sys.modules.get("torch", {}), "Tensor"):
-    sys.modules["torch"].Tensor = type("Tensor", (), {})
+    # If already loaded, make sure Tensor exists
+    if not hasattr(sys.modules["torch"], "Tensor"):
+        sys.modules["torch"].Tensor = type("Tensor", (), {})
+
 from python.kinetic_rt.hardware_probe import get_topology_string
 
 class TestHardwareProbe(unittest.TestCase):
