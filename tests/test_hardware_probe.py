@@ -94,7 +94,7 @@ class TestHardwareProbe(unittest.TestCase):
         with patch('torch.version') as mock_version:
             mock_version.hip = None
             topology, backend, arch = probe_hardware()
-            self.assertEqual(topology, f"2x {torch.cuda.get_device_name(device_id)} (Compute 7.0)")
+            self.assertEqual(topology, f"2x {mock_get_device_name(device_id)} (Compute 7.0)")
             self.assertEqual(backend, "CUDA")
             self.assertEqual(arch, "sm70")
 
@@ -112,7 +112,7 @@ class TestHardwareProbe(unittest.TestCase):
         with patch('torch.version') as mock_version:
             mock_version.hip = '5.7.0'
             topology, backend, arch = probe_hardware()
-            self.assertEqual(topology, f"1x {torch.cuda.get_device_name(device_id)}")
+            self.assertEqual(topology, f"1x {mock_get_device_name(device_id)}")
             self.assertEqual(backend, "ROCm")
             self.assertEqual(arch, "gfx1100")
 
@@ -130,7 +130,7 @@ class TestHardwareProbe(unittest.TestCase):
         with patch('torch.version') as mock_version:
             mock_version.hip = '5.7.0'
             topology, backend, arch = probe_hardware()
-            self.assertEqual(topology, f"1x {torch.cuda.get_device_name(device_id)}")
+            self.assertEqual(topology, f"1x {mock_get_device_name(device_id)}")
             self.assertEqual(backend, "ROCm")
             self.assertEqual(arch, "gfx906")
 
@@ -148,7 +148,7 @@ class TestHardwareProbe(unittest.TestCase):
         with patch('torch.version') as mock_version:
             mock_version.hip = '5.7.0'
             topology, backend, arch = probe_hardware()
-            self.assertEqual(topology, f"1x {torch.cuda.get_device_name(device_id)}")
+            self.assertEqual(topology, f"1x {mock_get_device_name(device_id)}")
             self.assertEqual(backend, "ROCm")
             self.assertEqual(arch, "gfx90a")
 
