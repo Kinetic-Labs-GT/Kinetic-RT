@@ -1,0 +1,18 @@
+--- tests/test_hardware_probe.py
++++ tests/test_hardware_probe.py
+@@ -3,11 +3,13 @@
+ from types import ModuleType
+ from unittest.mock import patch
+
+-if "torch" not in sys.modules:
++try:
++    import torch
++except ImportError:
+     torch = ModuleType("torch")
+     torch.Tensor = type("Tensor", (), {})
+     sys.modules["torch"] = torch
+-else:
++
+     # If already loaded, make sure Tensor exists
+     if not hasattr(sys.modules["torch"], "Tensor"):
+         sys.modules["torch"].Tensor = type("Tensor", (), {})
