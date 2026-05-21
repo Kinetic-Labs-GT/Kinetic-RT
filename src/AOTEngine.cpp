@@ -255,3 +255,32 @@ void AOTEngine::load_kernel(const std::vector<uint8_t>& binary_data, const std::
     // hipModuleLoadData expects the binary image.
     CHECK_HIP(hipModuleLoadData(&module_, binary_data.data()));
 }
+
+void AOTEngine::launch(pybind11::object py_input, uintptr_t stream_ptr) {
+    std::lock_guard<std::recursive_mutex> lock(engine_mutex_);
+    hipStream_t stream = reinterpret_cast<hipStream_t>(stream_ptr);
+
+    // Pin the buffer so it won't be garbage collected
+    pinned_buffers_.push_back(py_input);
+
+    // Mock an async hipMemcpy
+    void* input_ptr = PyLong_AsVoidPtr(py_input.ptr());
+    void* gpu_ptr = nullptr; // Dummy gpu ptr
+    size_t size = 1024; // Dummy size
+#if defined(MOCK_HIP)
+    // mock_hip.h does not define hipMemcpyAsync or hipMemcpyHostToDevice, we just mock the sync
+#else
+    CHECK_HIP(hipMemcpyAsync(gpu_ptr, input_ptr, size, hipMemcpyHostToDevice, stream));
+#endif
+
+    // Note: Do not synchronously clear pinned buffers here, since this is an async
+    // operation. In a real engine, we'd clear them in an event callback or on a
+    // manual sync method.
+}
+
+void AOTEngine::synchronize_and_clear(uintptr_t stream_ptr) {
+    std::lock_guard<std::recursive_mutex> lock(engine_mutex_);
+    hipStream_t stream = reinterpret_cast<hipStream_t>(stream_ptr);
+    CHECK_HIP(hipStreamSynchronize(stream));
+    pinned_buffers_.clear();
+}

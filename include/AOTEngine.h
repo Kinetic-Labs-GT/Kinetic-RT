@@ -13,6 +13,8 @@
 #include <hip/hip_runtime.h>
 #endif
 
+#include <pybind11/pybind11.h>
+
 // HardwareMismatch Exception
 class HardwareMismatchError : public std::runtime_error {
 public:
@@ -78,11 +80,15 @@ public:
     // Load from .kin and initialize the engine
     void load_model(const std::string& filepath);
 
+    void launch(pybind11::object py_input, uintptr_t stream_ptr);
+    void synchronize_and_clear(uintptr_t stream_ptr);
+
 private:
     SmartAutotuner autotuner_;
     Serializer serializer_;
     hipModule_t module_;
     std::recursive_mutex engine_mutex_;
+    std::vector<pybind11::object> pinned_buffers_;
 
     void load_kernel(const std::vector<uint8_t>& binary_data, const std::string& target_architecture);
     void validate_elf_structure(const std::vector<uint8_t>& binary_data, const std::string& target_architecture) const;
