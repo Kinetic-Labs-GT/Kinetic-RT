@@ -17,7 +17,11 @@ class StreamContext:
         return self.stream
 
     def __exit__(self, exc_type, exc_value, traceback):
-        pass
+        if exc_type is not None:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Stream context exited with error: {exc_value}")
+        return False
 
 class KineticRuntime:
     def __init__(self, engine, wrapper):

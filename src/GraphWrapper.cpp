@@ -17,8 +17,10 @@ GraphWrapper::~GraphWrapper() {
     try {
         invalidate();
         hipEventDestroy(sync_event_);
+    } catch (const std::exception& e) {
+        std::cerr << "Exception in GraphWrapper destructor: " << e.what() << std::endl;
     } catch (...) {
-        // Suppress exceptions in destructor
+        std::cerr << "Unknown exception in GraphWrapper destructor." << std::endl;
     }
 }
 
@@ -116,8 +118,6 @@ void GraphWrapper::launch(std::vector<pybind11::object> stream_objs, std::vector
         throw std::runtime_error("Cannot launch graph: not instantiated.");
     }
 
-    std::vector<std::thread> workers;
-
     std::vector<uintptr_t> stream_ptrs;
     stream_ptrs.reserve(stream_objs.size());
 #ifndef NO_PYBIND
@@ -137,16 +137,7 @@ void GraphWrapper::launch(std::vector<pybind11::object> stream_objs, std::vector
 
         for (auto stream_ptr : stream_ptrs) {
             hipStream_t stream = reinterpret_cast<hipStream_t>(stream_ptr);
-
-            workers.emplace_back([this, stream]() {
-                CHECK_HIP(hipGraphLaunch(graph_exec_, stream));
-            });
-        }
-
-        for (auto& worker : workers) {
-            if (worker.joinable()) {
-                worker.join();
-            }
+            CHECK_HIP(hipGraphLaunch(graph_exec_, stream));
         }
     }
 

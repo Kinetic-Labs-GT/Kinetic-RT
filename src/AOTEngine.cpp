@@ -136,11 +136,6 @@ std::vector<uint8_t> Serializer::load_kin_file(const std::string& filepath) {
         throw std::runtime_error("Invalid file format: sizes exceed file bounds.");
     }
 
-    // Additional sanity bounds for massive allocations
-    if (kernel_binaries_size > 1024ULL * 1024ULL * 1024ULL * 2ULL || op_graph_data_size > 1024ULL * 1024ULL * 1024ULL * 2ULL) { // 2 GB max arbitrary limit
-        throw std::runtime_error("Invalid file format: excessively large section.");
-    }
-
     char safe_target[256];
     std::strncpy(safe_target, header.target_architecture, 255);
     safe_target[255] = '\0';
@@ -233,15 +228,14 @@ void AOTEngine::validate_elf_structure(const std::vector<uint8_t>& binary_data, 
 
     // Cross-platform interlock check
 #ifdef __HIP_PLATFORM_NVIDIA__
-    std::string expected_prefix = "CUDA";
     uint16_t expected_em = 0xBE; // EM_CUDA (190)
 #else
-    std::string expected_prefix = "ROCm";
     uint16_t expected_em = 0xE0; // EM_AMDGPU (224)
 #endif
 
-    if (target_architecture.substr(0, 4) != expected_prefix) {
-        throw HardwareMismatchError("Hardware mismatch: expected target architecture starting with " + expected_prefix + " but found " + target_architecture);
+    // Strictly check against device ID and exact target_architecture without prefix mangling
+    if (target_architecture != serializer_.get_loaded_target_architecture()) {
+        throw HardwareMismatchError("Hardware mismatch: target architecture string mismatch.");
     }
 
     if (e_machine != expected_em) {

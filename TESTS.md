@@ -31,10 +31,10 @@ The "First Light" sequence tests the full end-to-end extraction, compilation, an
 
 1.  **Export and Serialize Model:** Shard weights (e.g. `TP=1`), compile Triton ops based on hardware discovery, and generate the binary artifact.
     ```bash
-    python scripts/export_hf.py --tp 1
+    python scripts/export_hf.py --tp 1 --output_dir ./models
     ```
 
 2.  **Execute Inference:** Launch the orchestrator to mount the serialized `.kin` file to the C++ runtime.
     ```bash
-    PYTHONPATH=. python scripts/run_first_light.py
+    PYTHONPATH=. python scripts/run_first_light.py --model_dir ./models
     ```
