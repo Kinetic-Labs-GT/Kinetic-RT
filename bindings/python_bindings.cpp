@@ -37,7 +37,15 @@ PYBIND11_MODULE(_core, m) {
         }, "Compile and autotune model to a .kin file",
              py::arg("output_filepath"), py::arg("stream_obj"), py::arg("target_architecture"))
         .def("load_model", &AOTEngine::load_model, "Load a compiled .kin model",
-             py::arg("filepath"));
+             py::arg("filepath"))
+        .def("launch", [](AOTEngine& self, py::object py_input, py::object stream_obj) {
+            self.launch(py_input, py::cast<uintptr_t>(stream_obj));
+        }, "Launch AOT kernel asynchronously with pinned buffers",
+             py::arg("py_input"), py::arg("stream_obj"))
+        .def("synchronize_and_clear", [](AOTEngine& self, py::object stream_obj) {
+            self.synchronize_and_clear(py::cast<uintptr_t>(stream_obj));
+        }, "Synchronize stream and clear pinned buffers",
+             py::arg("stream_obj"));
 
     py::class_<Serializer>(m, "Serializer")
         .def(py::init<>())

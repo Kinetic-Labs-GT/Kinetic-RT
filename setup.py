@@ -23,10 +23,12 @@ try:
         compute_cap = torch.cuda.get_device_capability()
     else:
         compute_cap = None
+        default_arch = "sm_60"
 except Exception:
     import warnings
     warnings.warn("PyTorch is not installed or CUDA is unavailable. Falling back to default mock/PTX compiler flags. Please install PyTorch for native hardware compilation.")
     compute_cap = None
+    default_arch = "sm_60"
 
 mock_hip = os.environ.get("MOCK_HIP", "1") == "1"
 

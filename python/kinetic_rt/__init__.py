@@ -1,4 +1,8 @@
 from .hardware_probe import get_topology_string
 
-from ._core import AOTEngine, GraphWrapper, Serializer, Communicator, HardwareMismatchError
+try:
+    from ._core import AOTEngine, GraphWrapper, Serializer, Communicator, HardwareMismatchError
+except ImportError as e:
+    raise ImportError("Unable to load kinetic_rt extension. Ensure the CUDA/ROCm toolkit is correctly installed and the C++ extension compiled successfully.") from e
+
 from .orchestrator import KineticRuntime, StreamContext
