@@ -57,7 +57,8 @@ PYBIND11_MODULE(_core, m) {
     py::class_<Communicator>(m, "Communicator")
         .def(py::init<int, int>(), py::arg("rank"), py::arg("world_size"))
         .def("all_reduce_async", [](Communicator& self, uintptr_t sendbuff, uintptr_t recvbuff, size_t count, int datatype, int op, py::object stream_obj) {
+            uintptr_t stream_ptr = py::cast<uintptr_t>(stream_obj);
             py::gil_scoped_release release;
-            self.all_reduce_async(reinterpret_cast<void*>(sendbuff), reinterpret_cast<void*>(recvbuff), count, datatype, op, py::cast<uintptr_t>(stream_obj));
+            self.all_reduce_async(reinterpret_cast<void*>(sendbuff), reinterpret_cast<void*>(recvbuff), count, datatype, op, stream_ptr);
         }, "Perform async all_reduce", py::arg("sendbuff"), py::arg("recvbuff"), py::arg("count"), py::arg("datatype"), py::arg("op"), py::arg("stream_obj"));
 }
