@@ -17,18 +17,28 @@ class get_pybind_include(object):
 # For a real ROCm environment, we'd include actual HIP paths.
 # Since we are setting up a mock build for CI/testing without ROCm, we'll configure it differently.
 
-try:
-    import torch
-    if torch.cuda.is_available():
-        compute_cap = torch.cuda.get_device_capability()
-    else:
-        compute_cap = None
-        default_arch = "sm_60"
-except Exception:
+# Disable automatic architecture fallback via torch unless explicitly requested via environment variables.
+cuda_arch = os.environ.get("CUDA_ARCH")
+hip_arch = os.environ.get("HIP_ARCH")
+
+if not cuda_arch and not hip_arch:
     import warnings
-    warnings.warn("PyTorch is not installed or CUDA is unavailable. Falling back to default mock/PTX compiler flags. Please install PyTorch for native hardware compilation.")
+    warnings.warn("Cross-Compilation Safety: Neither CUDA_ARCH nor HIP_ARCH was specified. Falling back to mock/PTX compiler flags. For production builds, please pass --cuda-arch or --hip-arch to prevent silent fallbacks.")
     compute_cap = None
     default_arch = "sm_60"
+else:
+    try:
+        import torch
+        if torch.cuda.is_available():
+            compute_cap = torch.cuda.get_device_capability()
+        else:
+            compute_cap = None
+            default_arch = "sm_60"
+    except Exception:
+        import warnings
+        warnings.warn("PyTorch is not installed or CUDA is unavailable. Falling back to default mock/PTX compiler flags.")
+        compute_cap = None
+        default_arch = "sm_60"
 
 mock_hip = os.environ.get("MOCK_HIP", "1") == "1"
 

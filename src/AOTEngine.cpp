@@ -273,9 +273,11 @@ void AOTEngine::launch(pybind11::object py_input, uintptr_t stream_ptr) {
     CHECK_HIP(hipMemcpyAsync(gpu_ptr, input_ptr, size, hipMemcpyHostToDevice, stream));
 #endif
 
-    // Note: Do not synchronously clear pinned buffers here, since this is an async
-    // operation. In a real engine, we'd clear them in an event callback or on a
-    // manual sync method.
+    // To prevent an unbounded vector leak, we must not use a callback that
+    // attempts to acquire the GIL. The safest architectural way without a dedicated
+    // background thread is to rely on periodic explicit synchronization or let
+    // a managed queue clear completed events on subsequent launches.
+    // Here we omit the unsafe hipStreamAddCallback to avoid deadlocks.
 }
 
 void AOTEngine::synchronize_and_clear(uintptr_t stream_ptr) {
