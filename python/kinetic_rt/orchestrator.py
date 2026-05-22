@@ -29,6 +29,7 @@ class KineticRuntime:
         self.wrapper = wrapper
 
     def _convert_tensor(self, tensor: torch.Tensor) -> int:
+        tensor = tensor.contiguous()
         return tensor.data_ptr()
 
     def generate(self, prompt: str) -> str:
@@ -46,6 +47,9 @@ class KineticRuntime:
 
         with StreamContext() as stream:
             stream_ptr = stream.cuda_stream() if hasattr(stream, "cuda_stream") else 0x1000
+
+            # Dynamic device inference from input_tensor if available, but for our dummy tensor it's CPU.
+            device_index = input_tensor.device.index if input_tensor.device.type == 'cuda' else 0
 
             # The AOTEngine handles compilation/loading (which might have already happened before generate is called)
             # The GraphWrapper captures and launches
