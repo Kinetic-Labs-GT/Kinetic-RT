@@ -1,6 +1,5 @@
 import subprocess
 import os
-import re
 import torch
 
 def probe_hardware():
@@ -21,8 +20,7 @@ def probe_hardware():
             props = torch.cuda.get_device_properties(0)
             arch = getattr(props, 'gcnArchName', None)
             if not arch:
-                match = re.search(r"(gfx\d+[a-z0-9]*)", name)
-                arch = match.group(1) if match else "gfx90a"
+                raise RuntimeError("Architecture could not be dynamically probed.")
             else:
                 # Sometimes gcnArchName has a prefix or suffix, like gfx90a:sramecc+...
                 arch = arch.split(':')[0]
