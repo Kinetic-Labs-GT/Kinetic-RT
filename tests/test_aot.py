@@ -3,14 +3,14 @@ import os
 from python.kinetic_rt.hardware_probe import probe_hardware
 
 def test_serializer():
-    backend, arch, target_arch = BackendFactory.get_test_arch()
+    backend, target, target_target = BackendFactory.get_test_target()
 
     # We must match the device_id that Serializer will check against.
-    # We will pass KINETIC_FORCE_ARCH down from the environment.
-    # If not set, we use the arch found from BackendFactory to match our mock files
+    # We will pass KINETIC_TARGET down from the environment.
+    # If not set, we use the target found from BackendFactory to match our mock files
     # (since we bypass the strict check in our test environment by providing it correctly).
 
-    os.environ["KINETIC_FORCE_ARCH"] = arch
+    os.environ["KINETIC_TARGET"] = target
 
     serializer = kinetic_rt.Serializer()
     filepath = "test_model.kin"
@@ -28,7 +28,7 @@ def test_serializer():
         kernel_binaries[18:20] = [0xE0, 0x00] # EM_AMDGPU
 
     # Save file
-    serializer.save_kin_file(filepath, arch, target_arch, weights_hash, op_graph_data, kernel_binaries)
+    serializer.save_kin_file(filepath, target, target_target, weights_hash, op_graph_data, kernel_binaries)
     assert os.path.exists(filepath)
 
     # Load file
@@ -40,38 +40,38 @@ def test_serializer():
     # Construct an intentionally wrong architecture for rejection testing
     if backend == "CUDA":
         wrong_device_id = "gfx1100"
-        wrong_target_arch = "ROCm_gfx1100"
+        wrong_target_target = "ROCm_gfx1100"
         kernel_binaries_mismatch = list(kernel_binaries)
         kernel_binaries_mismatch[18:20] = [0xE0, 0x00] # EM_AMDGPU
     else:
         wrong_device_id = "sm75"
-        wrong_target_arch = "CUDA_sm75"
+        wrong_target_target = "CUDA_sm75"
         kernel_binaries_mismatch = list(kernel_binaries)
         kernel_binaries_mismatch[18:20] = [0xBE, 0x00] # EM_CUDA
 
-    serializer.save_kin_file(filepath_mismatch, wrong_device_id, wrong_target_arch, weights_hash, op_graph_data, kernel_binaries_mismatch)
+    serializer.save_kin_file(filepath_mismatch, wrong_device_id, wrong_target_target, weights_hash, op_graph_data, kernel_binaries_mismatch)
 
     try:
         serializer.load_kin_file(filepath_mismatch)
         assert False, "Should have raised HardwareMismatchError"
     except kinetic_rt.HardwareMismatchError as e:
         print(f"Caught expected HardwareMismatchError: {e}")
-        assert f"expected {wrong_device_id} but got {arch}" in str(e)
+        assert f"expected Kinetic target {wrong_device_id} but got {target}" in str(e)
 
     os.remove(filepath)
     os.remove(filepath_mismatch)
 
 class BackendFactory:
     @staticmethod
-    def get_test_arch():
-        topology, backend, arch = probe_hardware()
+    def get_test_target():
+        topology, backend, target = probe_hardware()
         if backend == "CPU":
             backend = "CPU"
-            arch = "CPU"
-        return backend, arch, f"{backend}_{arch}"
+            target = "CPU"
+        return backend, target, f"{backend}_{target}"
 
 def test_serializer_error_handling():
-    backend, arch, target_arch = BackendFactory.get_test_arch()
+    backend, target, target_target = BackendFactory.get_test_target()
     serializer = kinetic_rt.Serializer()
 
     # Test file not found
@@ -87,7 +87,7 @@ def test_serializer_error_handling():
     # Test write failure
     nonexistent_path = os.path.join(tempfile.gettempdir(), f"invalid_dir_{uuid.uuid4()}", "test.kin")
     try:
-        serializer.save_kin_file(nonexistent_path, arch, target_arch, 12345, [], [])
+        serializer.save_kin_file(nonexistent_path, target, target_target, 12345, [], [])
         assert False, "Should have raised RuntimeError for write failure"
     except RuntimeError as e:
         print(f"Caught expected RuntimeError: {e}")
@@ -129,14 +129,14 @@ def test_aot_engine():
     # In test_aot_engine, we must ensure we use a valid architecture prefix (CUDA or ROCm)
     # because AOTEngine::validate_elf_structure explicitly expects these prefixes.
     # We will pretend we are on the detected backend, or fallback to ROCm for headless.
-    backend, arch, target_arch = BackendFactory.get_test_arch()
+    backend, target, target_target = BackendFactory.get_test_target()
 
     engine = kinetic_rt.AOTEngine()
     filepath = "aot_model.kin"
     stream_ptr = 1234
 
     # Compile
-    engine.compile_ahead_of_time(filepath, stream_ptr, target_arch)
+    engine.compile_ahead_of_time(filepath, stream_ptr, target_target)
     assert os.path.exists(filepath)
 
     # Load

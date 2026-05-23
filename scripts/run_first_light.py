@@ -21,14 +21,9 @@ def run_inference():
     engine = kinetic_rt.AOTEngine()
     wrapper = kinetic_rt.GraphWrapper()
 
-    model_path = os.path.join(args.model_dir, "smollm_135m_tp2.kin")
-    if os.environ.get("MOCK_HIP") == "1" and not os.path.exists(model_path):
-        logger.info(f"Skipping load model in mock CI, file {model_path} missing.")
-    else:
-        logger.info(f"Loading {model_path}...")
-        engine.load_model(model_path)
-
     runtime = KineticRuntime(engine, wrapper)
+    logger.info(f"Dynamically discovering topology and loading models from {args.model_dir}...")
+    runtime.load_model(args.model_dir)
 
     prompt = "The capital of India is "
     logger.info(f"Generating continuation for: '{prompt}'")

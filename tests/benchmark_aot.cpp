@@ -10,9 +10,9 @@ int main() {
     std::string device_id(prop.gcnArchName);
 
 #ifdef __HIP_PLATFORM_NVIDIA__
-    std::string target_arch = "CUDA_" + device_id;
+    std::string target_target = "CUDA_" + device_id;
 #else
-    std::string target_arch = "ROCm_" + device_id;
+    std::string target_target = "ROCm_" + device_id;
 #endif
 
 #if defined(MOCK_HIP)
@@ -21,7 +21,7 @@ int main() {
 #endif
 
     for (int i = 0; i < 100; ++i) {
-        engine.compile_ahead_of_time("test_output.kin", 0, target_arch);
+        engine.compile_ahead_of_time("test_output.kin", 0, target_target);
     }
 
 #if defined(MOCK_HIP)

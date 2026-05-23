@@ -8,7 +8,7 @@ The core architecture fuses Triton-compiled kernels within a pure, high-performa
 - **C++ Native Engine:** High-performance core managing AOT compilation, concurrent multi-stream execution, and zero-copy tensor mapping via pure C++ memory management (safeguarded by rigorous `std::lock_guard` mutexes for thread safety).
 - **Triton AOT Compilation:** Fused operations are statically compiled via Triton and serialized into `.kin` hardware-specific files, avoiding runtime JIT overhead.
 - **Hardware-Agnostic & Resilient:** Dynamically probes topologies. Adapts transparently across NVIDIA (CUDA `smXX`), AMD (ROCm `gfxXX`), or cleanly falls back to `CPU` for headless execution.
-- **Explicit Target Override:** The system environment variable `KINETIC_FORCE_ARCH` (e.g., `export KINETIC_FORCE_ARCH=sm75`) overrides hardware discovery if targeted cross-compilation is required.
+- **Explicit Target Override:** The system environment variable `KINETIC_TARGET` (e.g., `export KINETIC_TARGET=sm75`) overrides hardware discovery if targeted cross-compilation is required.
 
 ## Compilation & Installation
 

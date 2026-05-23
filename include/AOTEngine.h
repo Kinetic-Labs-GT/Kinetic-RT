@@ -27,7 +27,7 @@ struct KinHeader {
     uint32_t magic_number; // e.g., 0x4B494E00
     uint32_t version;
     char device_id[256];   // e.g., "gfx1100"
-    char target_architecture[256]; // e.g., "CUDA_sm75" or "ROCm_gfx942"
+    char kinetic_target[256]; // e.g., "CUDA_sm75" or "ROCm_gfx942"
     uint64_t weights_hash;
     uint64_t op_graph_data_offset;
     uint64_t op_graph_data_size;
@@ -55,18 +55,21 @@ public:
     Serializer();
 
     // Serializes the graph recipe and kernel binaries into a single .kin file
-    void save_kin_file(const std::string& filepath, const std::string& device_id, const std::string& target_architecture, uint64_t weights_hash, const std::vector<uint8_t>& op_graph_data, const std::vector<uint8_t>& kernel_binaries);
+    void save_kin_file(const std::string& filepath, const std::string& device_id, const std::string& kinetic_target, uint64_t weights_hash, const std::vector<uint8_t>& op_graph_data, const std::vector<uint8_t>& kernel_binaries);
 
     // Reads the .kin file and validates hardware compatibility
     // Returns the kernel binaries
     std::vector<uint8_t> load_kin_file(const std::string& filepath);
 
+    // Reads metadata without fully loading the binary
+    uint32_t get_tensor_parallel_degree(const std::string& filepath);
+
     const std::string& get_device_id() const { return device_id_; }
-    const std::string& get_loaded_target_architecture() const { return loaded_target_architecture_; }
+    const std::string& get_loaded_kinetic_target() const { return loaded_kinetic_target_; }
 
 private:
     std::string device_id_;
-    std::string loaded_target_architecture_;
+    std::string loaded_kinetic_target_;
 };
 
 class AOTEngine {
@@ -75,7 +78,7 @@ public:
     ~AOTEngine();
 
     // Perform AOT compilation and tuning, save as .kin
-    void compile_ahead_of_time(const std::string& output_filepath, uintptr_t stream_ptr, const std::string& target_architecture);
+    void compile_ahead_of_time(const std::string& output_filepath, uintptr_t stream_ptr, const std::string& kinetic_target);
 
     // Load from .kin and initialize the engine
     void load_model(const std::string& filepath);
@@ -90,6 +93,6 @@ private:
     std::recursive_mutex engine_mutex_;
     std::vector<pybind11::object> pinned_buffers_;
 
-    void load_kernel(const std::vector<uint8_t>& binary_data, const std::string& target_architecture);
-    void validate_elf_structure(const std::vector<uint8_t>& binary_data, const std::string& target_architecture) const;
+    void load_kernel(const std::vector<uint8_t>& binary_data, const std::string& kinetic_target);
+    void validate_elf_structure(const std::vector<uint8_t>& binary_data, const std::string& kinetic_target) const;
 };

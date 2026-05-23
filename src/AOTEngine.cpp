@@ -57,9 +57,9 @@ std::string SmartAutotuner::profile_gemm(uintptr_t stream_ptr) {
 // --- Serializer ---
 
 Serializer::Serializer() {
-    const char* forced_arch = std::getenv("KINETIC_FORCE_ARCH");
-    if (forced_arch != nullptr && std::strlen(forced_arch) > 0) {
-        device_id_ = std::string(forced_arch);
+    const char* forced_target = std::getenv("KINETIC_TARGET");
+    if (forced_target != nullptr && std::strlen(forced_target) > 0) {
+        device_id_ = std::string(forced_target);
     } else {
         hipDeviceProp_t prop;
         CHECK_HIP(hipGetDeviceProperties(&prop, 0)); // Assuming device 0
@@ -67,7 +67,7 @@ Serializer::Serializer() {
     }
 }
 
-void Serializer::save_kin_file(const std::string& filepath, const std::string& device_id, const std::string& target_architecture, uint64_t weights_hash, const std::vector<uint8_t>& op_graph_data, const std::vector<uint8_t>& kernel_binaries) {
+void Serializer::save_kin_file(const std::string& filepath, const std::string& device_id, const std::string& kinetic_target, uint64_t weights_hash, const std::vector<uint8_t>& op_graph_data, const std::vector<uint8_t>& kernel_binaries) {
     std::ofstream out(filepath, std::ios::binary);
     if (!out) {
         throw std::runtime_error("Failed to open file for writing: " + filepath);
@@ -79,8 +79,8 @@ void Serializer::save_kin_file(const std::string& filepath, const std::string& d
     header.version = htole32(1);
     std::strncpy(header.device_id, device_id.c_str(), sizeof(header.device_id) - 1);
     header.device_id[sizeof(header.device_id) - 1] = '\0';
-    std::strncpy(header.target_architecture, target_architecture.c_str(), sizeof(header.target_architecture) - 1);
-    header.target_architecture[sizeof(header.target_architecture) - 1] = '\0';
+    std::strncpy(header.kinetic_target, kinetic_target.c_str(), sizeof(header.kinetic_target) - 1);
+    header.kinetic_target[sizeof(header.kinetic_target) - 1] = '\0';
     header.weights_hash = htole64(weights_hash);
 
     header.op_graph_data_offset = htole64(sizeof(KinHeader));
@@ -137,14 +137,14 @@ std::vector<uint8_t> Serializer::load_kin_file(const std::string& filepath) {
     }
 
     char safe_target[256];
-    std::strncpy(safe_target, header.target_architecture, 255);
+    std::strncpy(safe_target, header.kinetic_target, 255);
     safe_target[255] = '\0';
-    loaded_target_architecture_ = std::string(safe_target);
+    loaded_kinetic_target_ = std::string(safe_target);
 
     header.device_id[255] = '\0';
     // Verify Hardware Mismatch
     if (device_id_ != header.device_id) {
-        throw HardwareMismatchError("Hardware mismatch: expected " + std::string(header.device_id) + " but got " + device_id_);
+        throw HardwareMismatchError("Hardware mismatch: expected Kinetic target " + std::string(header.device_id) + " but got " + device_id_);
     }
 
     // Skip op graph data for now, just read kernel binaries
@@ -159,6 +159,27 @@ std::vector<uint8_t> Serializer::load_kin_file(const std::string& filepath) {
     return kernel_binaries;
 }
 
+uint32_t Serializer::get_tensor_parallel_degree(const std::string& filepath) {
+    std::ifstream in(filepath, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("Failed to open file for reading: " + filepath);
+    }
+
+    KinHeader header;
+    in.read(reinterpret_cast<char*>(&header), sizeof(header));
+
+    if (in.gcount() < static_cast<std::streamsize>(sizeof(KinHeader))) {
+        throw std::runtime_error("Invalid file format: file too small for header.");
+    }
+
+    uint32_t magic_number = le32toh(header.magic_number);
+    if (magic_number != 0x4B494E00) {
+        throw std::runtime_error("Invalid file format: bad magic number.");
+    }
+
+    return le32toh(header.tensor_parallel_degree);
+}
+
 // --- AOTEngine ---
 
 AOTEngine::AOTEngine() : module_(nullptr) {
@@ -171,7 +192,7 @@ AOTEngine::~AOTEngine() {
     }
 }
 
-void AOTEngine::compile_ahead_of_time(const std::string& output_filepath, uintptr_t stream_ptr, const std::string& target_architecture) {
+void AOTEngine::compile_ahead_of_time(const std::string& output_filepath, uintptr_t stream_ptr, const std::string& kinetic_target) {
     std::lock_guard<std::recursive_mutex> lock(engine_mutex_);
     // 1. Profile and find best kernel
     std::string best_variant = autotuner_.profile_gemm(stream_ptr);
@@ -195,7 +216,7 @@ void AOTEngine::compile_ahead_of_time(const std::string& output_filepath, uintpt
     dummy_hsaco[18] = 0xBE; dummy_hsaco[19] = 0x00; // EM_CUDA
 #endif
 
-    serializer_.save_kin_file(output_filepath, device_id, target_architecture, dummy_weights_hash, dummy_op_graph_data, dummy_hsaco);
+    serializer_.save_kin_file(output_filepath, device_id, kinetic_target, dummy_weights_hash, dummy_op_graph_data, dummy_hsaco);
 }
 
 void AOTEngine::load_model(const std::string& filepath) {
@@ -204,10 +225,10 @@ void AOTEngine::load_model(const std::string& filepath) {
     std::vector<uint8_t> kernel_binaries = serializer_.load_kin_file(filepath);
 
     // 2. Load the kernel into the HIP module
-    load_kernel(kernel_binaries, serializer_.get_loaded_target_architecture());
+    load_kernel(kernel_binaries, serializer_.get_loaded_kinetic_target());
 }
 
-void AOTEngine::validate_elf_structure(const std::vector<uint8_t>& binary_data, const std::string& target_architecture) const {
+void AOTEngine::validate_elf_structure(const std::vector<uint8_t>& binary_data, const std::string& kinetic_target) const {
     // Deep Binary Validation
     if (binary_data.size() < 64) {
         throw std::runtime_error("Cannot load kernel: binary data too small for a valid ELF header.");
@@ -233,9 +254,9 @@ void AOTEngine::validate_elf_structure(const std::vector<uint8_t>& binary_data, 
     uint16_t expected_em = 0xE0; // EM_AMDGPU (224)
 #endif
 
-    // Strictly check against device ID and exact target_architecture without prefix mangling
-    if (target_architecture != serializer_.get_loaded_target_architecture()) {
-        throw HardwareMismatchError("Hardware mismatch: target architecture string mismatch.");
+    // Strictly check against device ID and exact kinetic_target without prefix mangling
+    if (kinetic_target != serializer_.get_loaded_kinetic_target()) {
+        throw HardwareMismatchError("Hardware mismatch: expected Kinetic target string mismatch.");
     }
 
     if (e_machine != expected_em) {
@@ -243,10 +264,10 @@ void AOTEngine::validate_elf_structure(const std::vector<uint8_t>& binary_data, 
     }
 }
 
-void AOTEngine::load_kernel(const std::vector<uint8_t>& binary_data, const std::string& target_architecture) {
+void AOTEngine::load_kernel(const std::vector<uint8_t>& binary_data, const std::string& kinetic_target) {
     std::lock_guard<std::recursive_mutex> lock(engine_mutex_);
 
-    validate_elf_structure(binary_data, target_architecture);
+    validate_elf_structure(binary_data, kinetic_target);
 
     if (module_ != nullptr) {
         CHECK_HIP(hipModuleUnload(module_));
@@ -273,11 +294,9 @@ void AOTEngine::launch(pybind11::object py_input, uintptr_t stream_ptr) {
     CHECK_HIP(hipMemcpyAsync(gpu_ptr, input_ptr, size, hipMemcpyHostToDevice, stream));
 #endif
 
-    // To prevent an unbounded vector leak, we must not use a callback that
-    // attempts to acquire the GIL. The safest architectural way without a dedicated
-    // background thread is to rely on periodic explicit synchronization or let
-    // a managed queue clear completed events on subsequent launches.
-    // Here we omit the unsafe hipStreamAddCallback to avoid deadlocks.
+    // Note: Do not synchronously clear pinned buffers here, since this is an async
+    // operation. In a real engine, we'd clear them in an event callback or on a
+    // manual sync method.
 }
 
 void AOTEngine::synchronize_and_clear(uintptr_t stream_ptr) {
