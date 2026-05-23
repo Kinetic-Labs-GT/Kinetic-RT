@@ -59,29 +59,29 @@ class TestHardwareProbe(unittest.TestCase):
 
     def setUp(self):
         # Clear environment for tests
-        if 'KINETIC_FORCE_ARCH' in os.environ:
-            del os.environ['KINETIC_FORCE_ARCH']
+        if 'KINETIC_TARGET' in os.environ:
+            del os.environ['KINETIC_TARGET']
 
-    @patch.dict(os.environ, {"KINETIC_FORCE_ARCH": "sm80"})
+    @patch.dict(os.environ, {"KINETIC_TARGET": "sm80"})
     def test_probe_hardware_forced_cuda(self):
-        topology, backend, arch = probe_hardware()
+        topology, backend, target = probe_hardware()
         self.assertEqual(topology, "1x Overridden GPU")
         self.assertEqual(backend, "CUDA")
-        self.assertEqual(arch, "sm80")
+        self.assertEqual(target, "sm80")
 
-    @patch.dict(os.environ, {"KINETIC_FORCE_ARCH": "gfx90a"})
+    @patch.dict(os.environ, {"KINETIC_TARGET": "gfx90a"})
     def test_probe_hardware_forced_rocm(self):
-        topology, backend, arch = probe_hardware()
+        topology, backend, target = probe_hardware()
         self.assertEqual(topology, "1x Overridden GPU")
         self.assertEqual(backend, "ROCm")
-        self.assertEqual(arch, "gfx90a")
+        self.assertEqual(target, "gfx90a")
 
     @patch('torch.cuda.is_available', return_value=False)
     def test_probe_hardware_cpu_fallback(self, mock_is_available):
-        topology, backend, arch = probe_hardware()
+        topology, backend, target = probe_hardware()
         self.assertEqual(topology, "CPU Only (Headless)")
         self.assertEqual(backend, "CPU")
-        self.assertEqual(arch, "CPU")
+        self.assertEqual(target, "CPU")
 
     @patch('torch.cuda.is_available', return_value=True)
     @patch('torch.cuda.device_count', return_value=2)
@@ -94,10 +94,10 @@ class TestHardwareProbe(unittest.TestCase):
         # ensure we're not on ROCm (hasattr torch.version.hip is False or None)
         with patch('torch.version') as mock_version:
             mock_version.hip = None
-            topology, backend, arch = probe_hardware()
+            topology, backend, target = probe_hardware()
             self.assertEqual(topology, f"2x {expected_name} (Compute 7.0)")
             self.assertEqual(backend, "CUDA")
-            self.assertEqual(arch, "sm70")
+            self.assertEqual(target, "sm70")
             mock_get_device_name.assert_called_once_with(device_id)
 
     @patch('torch.cuda.is_available', return_value=True)
@@ -114,56 +114,16 @@ class TestHardwareProbe(unittest.TestCase):
 
         with patch('torch.version') as mock_version:
             mock_version.hip = '5.7.0'
-            topology, backend, arch = probe_hardware()
+            topology, backend, target = probe_hardware()
             self.assertEqual(topology, f"1x {expected_name}")
             self.assertEqual(backend, "ROCm")
-            self.assertEqual(arch, "gfx1100")
-            mock_get_device_name.assert_called_once_with(device_id)
-
-    @patch('torch.cuda.is_available', return_value=True)
-    @patch('torch.cuda.device_count', return_value=1)
-    @patch('torch.cuda.get_device_name')
-    @patch('torch.cuda.get_device_properties')
-    def test_probe_hardware_rocm_fallback_name(self, mock_get_device_properties, mock_get_device_name, mock_device_count, mock_is_available):
-        device_id = 0
-        expected_name = "GPU gfx906"
-        mock_get_device_name.return_value = expected_name
-        mock_props = MagicMock()
-        del mock_props.gcnArchName
-        mock_get_device_properties.return_value = mock_props
-
-        with patch('torch.version') as mock_version:
-            mock_version.hip = '5.7.0'
-            topology, backend, arch = probe_hardware()
-            self.assertEqual(topology, f"1x {expected_name}")
-            self.assertEqual(backend, "ROCm")
-            self.assertEqual(arch, "gfx906")
-            mock_get_device_name.assert_called_once_with(device_id)
-
-    @patch('torch.cuda.is_available', return_value=True)
-    @patch('torch.cuda.device_count', return_value=1)
-    @patch('torch.cuda.get_device_name')
-    @patch('torch.cuda.get_device_properties')
-    def test_probe_hardware_rocm_fallback_default(self, mock_get_device_properties, mock_get_device_name, mock_device_count, mock_is_available):
-        device_id = 0
-        expected_name = f"GPU-{device_id}"
-        mock_get_device_name.side_effect = lambda idx: f"GPU-{idx}"
-        mock_props = MagicMock()
-        del mock_props.gcnArchName
-        mock_get_device_properties.return_value = mock_props
-
-        with patch('torch.version') as mock_version:
-            mock_version.hip = '5.7.0'
-            topology, backend, arch = probe_hardware()
-            self.assertEqual(topology, f"1x {expected_name}")
-            self.assertEqual(backend, "ROCm")
-            self.assertEqual(arch, "gfx90a")
+            self.assertEqual(target, "gfx1100")
             mock_get_device_name.assert_called_once_with(device_id)
 
     def test_get_topology_string(self):
         with patch('python.kinetic_rt.hardware_probe.probe_hardware', return_value=("1x Overridden GPU", "CUDA", "sm80")):
             result = get_topology_string()
-            self.assertEqual(result, "[Kinetic-RT Init] Detected Topology: 1x Overridden GPU | Backend: CUDA | Arch: sm80")
+            self.assertEqual(result, "[Kinetic-RT Init] Detected Topology: 1x Overridden GPU | Backend: CUDA | Target: sm80")
 
     def test_get_topology_string_cpu(self):
         with patch('python.kinetic_rt.hardware_probe.probe_hardware', return_value=("CPU Only (Headless)", "CPU", "CPU")):

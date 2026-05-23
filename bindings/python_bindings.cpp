@@ -32,10 +32,10 @@ PYBIND11_MODULE(_core, m) {
 
     py::class_<AOTEngine>(m, "AOTEngine")
         .def(py::init<>())
-        .def("compile_ahead_of_time", [](AOTEngine& self, const std::string& output_filepath, py::object stream_obj, const std::string& target_architecture) {
-            self.compile_ahead_of_time(output_filepath, py::cast<uintptr_t>(stream_obj), target_architecture);
+        .def("compile_ahead_of_time", [](AOTEngine& self, const std::string& output_filepath, py::object stream_obj, const std::string& kinetic_target) {
+            self.compile_ahead_of_time(output_filepath, py::cast<uintptr_t>(stream_obj), kinetic_target);
         }, "Compile and autotune model to a .kin file",
-             py::arg("output_filepath"), py::arg("stream_obj"), py::arg("target_architecture"))
+             py::arg("output_filepath"), py::arg("stream_obj"), py::arg("kinetic_target"))
         .def("load_model", &AOTEngine::load_model, "Load a compiled .kin model",
              py::arg("filepath"))
         .def("launch", [](AOTEngine& self, py::object py_input, py::object stream_obj) {
@@ -50,21 +50,17 @@ PYBIND11_MODULE(_core, m) {
     py::class_<Serializer>(m, "Serializer")
         .def(py::init<>())
         .def("save_kin_file", &Serializer::save_kin_file, "Save .kin file",
-             py::arg("filepath"), py::arg("device_id"), py::arg("target_architecture"), py::arg("weights_hash"), py::arg("op_graph_data"), py::arg("kernel_binaries"))
+             py::arg("filepath"), py::arg("device_id"), py::arg("kinetic_target"), py::arg("weights_hash"), py::arg("op_graph_data"), py::arg("kernel_binaries"))
         .def("load_kin_file", &Serializer::load_kin_file, "Load .kin file and return kernel binaries",
+             py::arg("filepath"))
+        .def("get_tensor_parallel_degree", &Serializer::get_tensor_parallel_degree, "Get tensor parallel degree from metadata",
              py::arg("filepath"));
 
     py::class_<Communicator>(m, "Communicator")
         .def(py::init<int, int>(), py::arg("rank"), py::arg("world_size"))
-        .def("all_reduce_async", [](Communicator& self, py::object sendbuff, py::object recvbuff, size_t count, int datatype, int op, py::object stream_obj) {
-            void* send_ptr = PyLong_AsVoidPtr(sendbuff.ptr());
-            void* recv_ptr = PyLong_AsVoidPtr(recvbuff.ptr());
+        .def("all_reduce_async", [](Communicator& self, uintptr_t sendbuff, uintptr_t recvbuff, size_t count, int datatype, int op, py::object stream_obj) {
             uintptr_t stream_ptr = py::cast<uintptr_t>(stream_obj);
-
-            // Note: Since this is an async operation, we should ideally pin the buffers
-            // similar to AOTEngine or pass actual pointers if lifetime is guaranteed by caller.
-            // For now, ensuring we don't blindly forge pointers from raw integers.
             py::gil_scoped_release release;
-            self.all_reduce_async(send_ptr, recv_ptr, count, datatype, op, stream_ptr);
+            self.all_reduce_async(reinterpret_cast<void*>(sendbuff), reinterpret_cast<void*>(recvbuff), count, datatype, op, stream_ptr);
         }, "Perform async all_reduce", py::arg("sendbuff"), py::arg("recvbuff"), py::arg("count"), py::arg("datatype"), py::arg("op"), py::arg("stream_obj"));
 }

@@ -5,4 +5,7 @@ try:
 except ImportError as e:
     raise ImportError("Unable to load kinetic_rt extension. Ensure the CUDA/ROCm toolkit is correctly installed and the C++ extension compiled successfully.") from e
 
+class TopologyMismatchError(Exception):
+    pass
+
 from .orchestrator import KineticRuntime, StreamContext

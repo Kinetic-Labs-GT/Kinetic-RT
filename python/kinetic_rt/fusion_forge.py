@@ -186,16 +186,16 @@ def compile_and_serialize(engine, serializer, output_filepath, device_id=None, *
     Triton-to-Kinetic Bridge
     Compiles the fused Triton kernel and serializes it into a .kin file using the Kinetic-RT Serializer.
     """
-    topology, backend, arch = probe_hardware()
+    topology, backend, target = probe_hardware()
 
     if backend == "CPU":
         backend = "CPU"
-        arch = "CPU"
+        target = "CPU"
 
     # Set the target architecture based on backend
-    target_architecture = f"{backend}_{arch}"
+    kinetic_target = f"{backend}_{target}"
     if device_id is None:
-        device_id = arch
+        device_id = target
 
     ir = kwargs.get("ir", "dummy_ir")
     try:
@@ -225,5 +225,5 @@ def compile_and_serialize(engine, serializer, output_filepath, device_id=None, *
     # For CI, we just skip detailed validation to simplify, or adjust the validator.
 
     # Serialize to .kin
-    serializer.save_kin_file(output_filepath, device_id, target_architecture, weights_hash, op_graph_data, list(compiled_binary))
+    serializer.save_kin_file(output_filepath, device_id, kinetic_target, weights_hash, op_graph_data, list(compiled_binary))
     logger.info(f"Fused kernel compiled and serialized to {output_filepath}")

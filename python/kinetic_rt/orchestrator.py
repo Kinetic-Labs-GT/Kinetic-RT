@@ -23,13 +23,51 @@ class StreamContext:
             logger.error(f"Stream context exited with error: {exc_value}")
         return False
 
+import os
+
 class KineticRuntime:
     def __init__(self, engine, wrapper):
         self.engine = engine
         self.wrapper = wrapper
+        self.tp_degree = 1
+        self.model_paths = []
+
+    def load_model(self, model_dir: str):
+        import glob
+        from . import Serializer, TopologyMismatchError
+
+        # In mock CI, pretend it loaded
+        if os.environ.get("MOCK_HIP") == "1" and not os.path.exists(model_dir):
+            self.tp_degree = 1
+            self.model_paths = ["dummy.kin"]
+            return
+
+        serializer = Serializer()
+
+        kin_files = glob.glob(os.path.join(model_dir, "*.kin"))
+        if not kin_files:
+            raise FileNotFoundError(f"No .kin files found in {model_dir}")
+
+        # Read metadata from the first file to find TP degree
+        self.tp_degree = serializer.get_tensor_parallel_degree(kin_files[0])
+
+        actual_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+        if self.tp_degree > 1 and actual_gpus < self.tp_degree:
+            raise TopologyMismatchError(f"Topology mismatch: Model exported with TP={self.tp_degree}, but found {actual_gpus} GPUs.")
+
+        # Map shards
+        self.model_paths = sorted(kin_files)
+        if len(self.model_paths) < self.tp_degree:
+            # We assume in a real environment we have one shard per TP degree if TP > 1,
+            # or maybe one big file and we load it differently.
+            # For simplicity, if we found files, we map what we have.
+            pass
+
+        # In a real environment we would load the shards into respective GPUs
+        for i in range(min(self.tp_degree, len(self.model_paths))):
+            self.engine.load_model(self.model_paths[i])
 
     def _convert_tensor(self, tensor: torch.Tensor) -> int:
-        tensor = tensor.contiguous()
         return tensor.data_ptr()
 
     def generate(self, prompt: str) -> str:
@@ -47,9 +85,6 @@ class KineticRuntime:
 
         with StreamContext() as stream:
             stream_ptr = stream.cuda_stream() if hasattr(stream, "cuda_stream") else 0x1000
-
-            # Dynamic device inference from input_tensor if available, but for our dummy tensor it's CPU.
-            device_index = input_tensor.device.index if input_tensor.device.type == 'cuda' else 0
 
             # The AOTEngine handles compilation/loading (which might have already happened before generate is called)
             # The GraphWrapper captures and launches
