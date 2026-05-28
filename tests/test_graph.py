@@ -1,5 +1,8 @@
 import pytest
 import python.kinetic_rt as kinetic_rt
+import logging
+
+logger = logging.getLogger(__name__)
 
 def test_graph_capture_and_launch():
     # Initialize wrapper
@@ -40,14 +43,14 @@ def test_graph_capture_and_launch():
     # Launch new graph
     wrapper.launch([stream_ptr], [])
 
-    print("Graph validation passed successfully!")
+    logger.info("Graph validation passed successfully!")
 
 def test_uninstantiated_launch():
     wrapper = kinetic_rt.GraphWrapper()
     stream_ptr = 1234
     with pytest.raises(RuntimeError, match="(?i)not instantiated"):
         wrapper.launch([stream_ptr], [])
-    print("Uninstantiated Launch Test passed successfully!")
+    logger.info("Uninstantiated Launch Test passed successfully!")
 
 def test_async_stress():
     wrapper = kinetic_rt.GraphWrapper()
@@ -67,10 +70,10 @@ def test_async_stress():
 
     # Invalidate at the end should clear out everything and sync cleanly
     wrapper.invalidate()
-    print("Async Stress Test passed successfully!")
+    logger.info("Graph validation passed successfully!")
 
 if __name__ == "__main__":
     test_graph_capture_and_launch()
     test_uninstantiated_launch()
     test_async_stress()
-    print("All tests passed successfully!")
+    logger.info("All tests passed successfully!")

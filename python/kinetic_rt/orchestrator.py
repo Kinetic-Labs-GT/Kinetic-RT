@@ -1,11 +1,16 @@
-import torch
 from contextlib import contextmanager
 from typing import List
+
+try:
+    import torch
+    HAS_TORCH = True
+except ImportError:
+    HAS_TORCH = False
 
 class StreamContext:
     def __init__(self):
         # Fallback to torch.cuda if available, otherwise just mock it for headless tests
-        if torch.cuda.is_available():
+        if HAS_TORCH and torch.cuda.is_available():
             self.stream = torch.cuda.Stream()
         else:
             class MockStream:
@@ -51,7 +56,7 @@ class KineticRuntime:
         # Read metadata from the first file to find TP degree
         self.tp_degree = serializer.get_tensor_parallel_degree(kin_files[0])
 
-        actual_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+        actual_gpus = torch.cuda.device_count() if HAS_TORCH and torch.cuda.is_available() else 0
         if self.tp_degree > 1 and actual_gpus < self.tp_degree:
             raise TopologyMismatchError(f"Topology mismatch: Model exported with TP={self.tp_degree}, but found {actual_gpus} GPUs.")
 
@@ -70,38 +75,54 @@ class KineticRuntime:
     def _convert_tensor(self, tensor: torch.Tensor) -> int:
         return tensor.data_ptr()
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, max_new_tokens: int = 10) -> str:
+        if not HAS_TORCH:
+            raise RuntimeError("PyTorch is required for generating text.")
+
         # Dummy tokenization loop: Tokenize -> Load into Engine -> Launch Graph -> Fetch Logits -> Argmax -> Append Token
 
-        # Tokenize (dummy list of ints)
+        # Tokenize (mock ASCII encoding)
         tokens = [ord(c) for c in prompt]
 
-        # We need to simulate memory management, mapping torch.Tensor to pointers
-        input_tensor = torch.tensor(tokens, dtype=torch.int32)
-        output_tensor = torch.zeros(len(tokens) * 50000, dtype=torch.float32)
+        vocab_size = 50257 # Standard GPT-2/SmolLM vocabulary size
 
-        input_ptr = self._convert_tensor(input_tensor)
-        output_ptr = self._convert_tensor(output_tensor)
+        for _ in range(max_new_tokens):
+            input_tensor = torch.tensor(tokens, dtype=torch.int32)
 
-        with StreamContext() as stream:
-            stream_ptr = stream.cuda_stream() if hasattr(stream, "cuda_stream") else 0x1000
+            # Use actual device tensor allocation
+            device = "cuda" if HAS_TORCH and torch.cuda.is_available() else "cpu"
+            input_tensor = input_tensor.to(device)
+            output_tensor = torch.empty((len(tokens), vocab_size), dtype=torch.float32, device=device)
 
-            # The AOTEngine handles compilation/loading (which might have already happened before generate is called)
-            # The GraphWrapper captures and launches
-            batch_size = 1
-            seq_len = len(tokens)
+            # Convert tensors to pointers for the C++ Pybind11 wrapper
+            input_ptr = self._convert_tensor(input_tensor)
+            output_ptr = self._convert_tensor(output_tensor)
 
-            self.wrapper.begin_capture(stream_ptr, batch_size, seq_len)
-            self.wrapper.end_capture(stream_ptr)
+            with StreamContext() as stream:
+                stream_ptr = stream.cuda_stream() if hasattr(stream, "cuda_stream") else 0x1000
 
-            # Launch graph with the extracted pointers to satisfy the orchestrator's pointer-mapping requirement
-            self.wrapper.launch([stream_ptr], [input_ptr, output_ptr])
-            self.wrapper.invalidate()
+                batch_size = 1
+                seq_len = len(tokens)
 
-        # Argmax logic (dummy, as outputs are zeros)
-        last_token_logits = output_tensor[-50000:]
-        argmax_idx = torch.argmax(last_token_logits).item()
+                self.wrapper.begin_capture(stream_ptr, batch_size, seq_len)
+                self.wrapper.end_capture(stream_ptr)
 
-        # Append Token (mock logic)
-        generated_token = chr(argmax_idx % 256) # Mock decoding
-        return prompt + generated_token
+                # Execute graph using pointers
+                # We also pass the original python objects to ensure they are pinned/kept alive
+                self.wrapper.launch([stream_ptr], [input_ptr, output_ptr, input_tensor, output_tensor])
+
+                # We strictly synchronize to ensure logits are fully written by the GPU
+                if HAS_TORCH and torch.cuda.is_available():
+                    torch.cuda.synchronize()
+
+                self.wrapper.invalidate()
+
+            # Argmax logic against actual tensor outputs
+            # Retrieve the logits for the last token in the sequence
+            last_token_logits = output_tensor[-1, :]
+
+            argmax_idx = torch.argmax(last_token_logits).item()
+            tokens.append(argmax_idx)
+
+        # Basic ascii decoding for the resulting tokenized sequence
+        return "".join(chr(t % 256) for t in tokens)

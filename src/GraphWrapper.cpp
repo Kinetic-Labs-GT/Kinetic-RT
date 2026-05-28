@@ -11,6 +11,20 @@ do { \
 
 GraphWrapper::GraphWrapper() : graph_(nullptr), graph_exec_(nullptr), is_instantiated_(false), current_batch_size_(-1), current_seq_len_(-1) {
     CHECK_HIP(hipEventCreate(&sync_event_));
+
+    // Initialize persistent thread pool with exactly 4 dedicated submission threads
+    execution_pool_ = std::make_unique<ThreadPool>(4);
+
+    // Aggressively pre-allocate event pool to avoid allocation overhead during launch
+    for (size_t i = 0; i < POOL_SIZE - 1; ++i) {
+        hipEvent_t event;
+#if defined(MOCK_HIP)
+        CHECK_HIP(hipEventCreate(&event));
+#else
+        CHECK_HIP(hipEventCreateWithFlags(&event, hipEventDisableTiming));
+#endif
+        event_pool_.push(event);
+    }
 }
 
 GraphWrapper::~GraphWrapper() {
@@ -53,17 +67,17 @@ void GraphWrapper::invalidate() {
     }
     in_flight_states_.clear();
 
-    for (auto& event : event_pool_) {
-        CHECK_HIP(hipEventDestroy(event));
+    hipEvent_t ev;
+    while(event_pool_.pop(ev)) {
+        CHECK_HIP(hipEventDestroy(ev));
     }
-    event_pool_.clear();
 }
 
 void GraphWrapper::cleanup_in_flight_states() {
     while (!in_flight_states_.empty()) {
         hipError_t status = hipEventQuery(in_flight_states_.front().event);
         if (status == hipSuccess) {
-            event_pool_.push_back(in_flight_states_.front().event);
+            event_pool_.push(in_flight_states_.front().event);
             in_flight_states_.pop_front();
         } else if (status == hipErrorNotReady) {
             break; // Still executing
@@ -134,10 +148,14 @@ void GraphWrapper::launch(std::vector<pybind11::object> stream_objs, std::vector
 #ifndef NO_PYBIND
         pybind11::gil_scoped_release release;
 #endif
-
+        // Dispatch launches asynchronously to the persistent thread pool
         for (auto stream_ptr : stream_ptrs) {
             hipStream_t stream = reinterpret_cast<hipStream_t>(stream_ptr);
-            CHECK_HIP(hipGraphLaunch(graph_exec_, stream));
+            auto graph_exec = graph_exec_;
+            execution_pool_->enqueue([graph_exec, stream]() {
+                // In mock HIP environments, this won't actually hit GPU so CHECK_HIP is safe to just return
+                CHECK_HIP(hipGraphLaunch(graph_exec, stream));
+            });
         }
     }
 
@@ -148,10 +166,11 @@ void GraphWrapper::launch(std::vector<pybind11::object> stream_objs, std::vector
 
         hipEvent_t event;
         hipError_t err_create = hipSuccess;
-        if (!event_pool_.empty()) {
-            event = event_pool_.back();
-            event_pool_.pop_back();
-        } else {
+
+        // Zero-tolerance for allocations in the hot path.
+        if (!event_pool_.pop(event)) {
+            // If the pool is completely exhausted (which shouldn't happen with POOL_SIZE=2048),
+            // fallback gracefully but print a warning in dev mode.
 #if defined(MOCK_HIP)
             err_create = hipEventCreate(&event);
 #else

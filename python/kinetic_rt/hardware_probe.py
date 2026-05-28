@@ -5,8 +5,18 @@ import torch
 def probe_hardware():
     forced_target = os.environ.get("KINETIC_TARGET")
     if forced_target:
-        backend = "CUDA" if "sm" in forced_target else "ROCm"
+        if "sm" in forced_target:
+            backend = "CUDA"
+        elif "gfx" in forced_target:
+            backend = "ROCm"
+        else:
+            backend = "CPU"
         return "1x Overridden GPU", backend, forced_target
+
+    try:
+        import torch
+    except ImportError:
+        return "CPU Only (Headless)", "CPU", "CPU"
 
     if torch.cuda.is_available():
         num_gpus = torch.cuda.device_count()

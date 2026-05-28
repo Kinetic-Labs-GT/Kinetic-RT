@@ -1,6 +1,9 @@
 import python.kinetic_rt as kinetic_rt
 import os
 from python.kinetic_rt.hardware_probe import probe_hardware
+import logging
+
+logger = logging.getLogger(__name__)
 
 def test_serializer():
     backend, target, target_target = BackendFactory.get_test_target()
@@ -55,7 +58,7 @@ def test_serializer():
         serializer.load_kin_file(filepath_mismatch)
         assert False, "Should have raised HardwareMismatchError"
     except kinetic_rt.HardwareMismatchError as e:
-        print(f"Caught expected HardwareMismatchError: {e}")
+        logger.info(f"Caught expected HardwareMismatchError: {e}")
         assert f"expected Kinetic target {wrong_device_id} but got {target}" in str(e)
 
     os.remove(filepath)
@@ -79,7 +82,7 @@ def test_serializer_error_handling():
         serializer.load_kin_file("non_existent_file.kin")
         assert False, "Should have raised RuntimeError for file not found"
     except RuntimeError as e:
-        print(f"Caught expected RuntimeError: {e}")
+        logger.info(f"Caught expected RuntimeError: {e}")
         assert "Failed to open file for reading" in str(e)
 
     import tempfile
@@ -90,7 +93,7 @@ def test_serializer_error_handling():
         serializer.save_kin_file(nonexistent_path, target, target_target, 12345, [], [])
         assert False, "Should have raised RuntimeError for write failure"
     except RuntimeError as e:
-        print(f"Caught expected RuntimeError: {e}")
+        logger.info(f"Caught expected RuntimeError: {e}")
         assert "Failed to open file for writing" in str(e)
 
 def test_bad_magic_number():
@@ -119,7 +122,7 @@ def test_bad_magic_number():
         serializer.load_kin_file(filepath)
         assert False, "Should have raised RuntimeError for bad magic number"
     except RuntimeError as e:
-        print(f"Caught expected RuntimeError: {e}")
+        logger.info(f"Caught expected RuntimeError: {e}")
         assert "bad magic number" in str(e).lower()
     finally:
         if os.path.exists(filepath):
@@ -144,11 +147,11 @@ def test_aot_engine():
 
     os.remove(filepath)
 
-    print("AOT Engine tests passed.")
+    logger.info("AOT Engine tests passed.")
 
 if __name__ == "__main__":
     test_serializer()
     test_serializer_error_handling()
     test_bad_magic_number()
     test_aot_engine()
-    print("All tests passed successfully!")
+    logger.info("All tests passed successfully!")
