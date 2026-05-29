@@ -15,6 +15,9 @@ GraphWrapper::GraphWrapper() : graph_(nullptr), graph_exec_(nullptr), is_instant
     // Initialize persistent thread pool with exactly 4 dedicated submission threads
     execution_pool_ = std::make_unique<ThreadPool>(4);
 
+    // Initialize PagedAttention BlockManager (e.g. 1024 blocks of size 16 tokens, assuming 4096 bytes per token representation)
+    block_manager_ = std::make_unique<BlockManager>(1024, 16, 4096);
+
     // Aggressively pre-allocate event pool to avoid allocation overhead during launch
     for (size_t i = 0; i < POOL_SIZE - 1; ++i) {
         hipEvent_t event;
@@ -71,6 +74,12 @@ void GraphWrapper::invalidate() {
     while(event_pool_.pop(ev)) {
         CHECK_HIP(hipEventDestroy(ev));
     }
+
+    // Free PagedAttention physical blocks
+    for (int block_id : current_block_table_) {
+        block_manager_->free_block(block_id);
+    }
+    current_block_table_.clear();
 }
 
 void GraphWrapper::cleanup_in_flight_states() {
@@ -104,6 +113,15 @@ void GraphWrapper::begin_capture(uintptr_t stream_ptr, int batch_size, int seq_l
         invalidate();
         current_batch_size_ = batch_size;
         current_seq_len_ = seq_len;
+
+        // PagedAttention: Compute needed blocks based on sequence length
+        int tokens_per_block = 16;
+        int blocks_needed = (seq_len + tokens_per_block - 1) / tokens_per_block;
+
+        // Allocate physical blocks dynamically
+        for (int i = current_block_table_.size(); i < blocks_needed; ++i) {
+            current_block_table_.push_back(block_manager_->allocate_block());
+        }
     } else {
         // If it's already valid and instantiated, we shouldn't be capturing again.
         // We could either ignore or throw an error. For simplicity, we assume the user checks is_valid().
@@ -148,14 +166,13 @@ void GraphWrapper::launch(std::vector<pybind11::object> stream_objs, std::vector
 #ifndef NO_PYBIND
         pybind11::gil_scoped_release release;
 #endif
-        // Dispatch launches asynchronously to the persistent thread pool
+        // Dispatch directly to the HIP stream queue
+        // We removed CPU ThreadPool dispatch here because hipGraphLaunch is intrinsically non-blocking
+        // on the host. Offloading it to a CPU thread pool introduces Python sync desynchronization
+        // leading to uninitialized output tensors.
         for (auto stream_ptr : stream_ptrs) {
             hipStream_t stream = reinterpret_cast<hipStream_t>(stream_ptr);
-            auto graph_exec = graph_exec_;
-            execution_pool_->enqueue([graph_exec, stream]() {
-                // In mock HIP environments, this won't actually hit GPU so CHECK_HIP is safe to just return
-                CHECK_HIP(hipGraphLaunch(graph_exec, stream));
-            });
+            CHECK_HIP(hipGraphLaunch(graph_exec_, stream));
         }
     }
 

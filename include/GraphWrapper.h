@@ -21,6 +21,7 @@
 #include <condition_variable>
 #include <queue>
 #include <pybind11/pybind11.h>
+#include "BlockManager.h"
 
 struct InFlightState {
     hipEvent_t event;
@@ -30,7 +31,11 @@ struct InFlightState {
 template <typename T, size_t Size>
 class LockFreeRingBuffer {
 private:
-    T buffer_[Size];
+    struct Slot {
+        T data;
+        std::atomic<bool> readable{false};
+    };
+    Slot buffer_[Size];
     std::atomic<size_t> head_{0};
     std::atomic<size_t> tail_{0};
 
@@ -43,8 +48,12 @@ public:
             if (next_tail == head) {
                 return false; // full
             }
-            if (tail_.compare_exchange_weak(tail, next_tail, std::memory_order_release, std::memory_order_relaxed)) {
-                buffer_[tail] = item;
+            // Claim the slot
+            if (tail_.compare_exchange_weak(tail, next_tail, std::memory_order_relaxed, std::memory_order_relaxed)) {
+                // Safely write data to the claimed slot
+                buffer_[tail].data = item;
+                // Memory fence via release to ensure the data write is visible
+                buffer_[tail].readable.store(true, std::memory_order_release);
                 return true;
             }
         }
@@ -57,8 +66,20 @@ public:
             if (head == tail) {
                 return false; // empty
             }
+            // If the slot is claimed but not yet fully written, we spin or fail.
+            // In a ring buffer, if head != tail, the slot *will* become readable shortly.
+            if (!buffer_[head].readable.load(std::memory_order_acquire)) {
+                // Yield thread to avoid heavy spinning, let writer finish
+                std::this_thread::yield();
+                continue;
+            }
+            // Read data before advancing head to prevent fast producers from overwriting
+            T extracted_item = buffer_[head].data;
+
+            // Now attempt to advance the head index
             if (head_.compare_exchange_weak(head, (head + 1) % Size, std::memory_order_release, std::memory_order_relaxed)) {
-                item = buffer_[head];
+                item = extracted_item;
+                buffer_[head].readable.store(false, std::memory_order_release);
                 return true;
             }
         }
@@ -160,6 +181,10 @@ private:
 
     // Persistent thread pool for execution
     std::unique_ptr<ThreadPool> execution_pool_;
+
+    // PagedAttention Block Manager
+    std::unique_ptr<BlockManager> block_manager_;
+    std::vector<int> current_block_table_;
 
     // Mutex for thread safety
     std::recursive_mutex engine_mutex_;

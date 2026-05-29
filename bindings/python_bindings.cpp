@@ -3,6 +3,8 @@
 #include "../include/GraphWrapper.h"
 #include "../include/AOTEngine.h"
 #include "../include/Communicator.h"
+#include "../include/Router.h"
+#include "../include/AsyncAPI.h"
 
 namespace py = pybind11;
 
@@ -63,4 +65,21 @@ PYBIND11_MODULE(_core, m) {
             py::gil_scoped_release release;
             self.all_reduce_async(reinterpret_cast<void*>(sendbuff), reinterpret_cast<void*>(recvbuff), count, datatype, op, stream_ptr);
         }, "Perform async all_reduce", py::arg("sendbuff"), py::arg("recvbuff"), py::arg("count"), py::arg("datatype"), py::arg("op"), py::arg("stream_obj"));
+
+    py::class_<HardwareRouter>(m, "HardwareRouter")
+        .def(py::init<>())
+        .def("load_model", &HardwareRouter::load_model, "Load a compiled .kin model or TensorRT plan", py::arg("filepath"))
+        .def("launch", [](HardwareRouter& self, uintptr_t input_ptr, uintptr_t output_ptr, int seq_len) {
+            self.launch(reinterpret_cast<void*>(input_ptr), reinterpret_cast<void*>(output_ptr), seq_len);
+        }, "Launch inference through the hardware-aware router via pointers", py::arg("input_ptr"), py::arg("output_ptr"), py::arg("seq_len"));
+
+    py::class_<InferenceQueue>(m, "InferenceQueue")
+        .def(py::init<>())
+        .def("submit", &InferenceQueue::submit, "Submit a request to the C++ engine natively",
+             py::arg("prompt"), py::arg("max_tokens"), py::arg("request_id"))
+        .def("poll", &InferenceQueue::poll, "Poll for stream responses via lock-free queue");
+
+    py::class_<InferenceWorker>(m, "InferenceWorker")
+        .def(py::init<InferenceQueue&, HardwareRouter&>(), py::arg("queue"), py::arg("router"),
+             py::keep_alive<1, 2>(), py::keep_alive<1, 3>(), "Initialize background C++ task consumer executing hardware routines");
 }

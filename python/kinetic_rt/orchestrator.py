@@ -31,8 +31,8 @@ class StreamContext:
 import os
 
 class KineticRuntime:
-    def __init__(self, engine, wrapper):
-        self.engine = engine
+    def __init__(self, engine, wrapper=None):
+        self.engine = engine # Acts as router if wrapper is None
         self.wrapper = wrapper
         self.tp_degree = 1
         self.model_paths = []
@@ -104,18 +104,24 @@ class KineticRuntime:
                 batch_size = 1
                 seq_len = len(tokens)
 
-                self.wrapper.begin_capture(stream_ptr, batch_size, seq_len)
-                self.wrapper.end_capture(stream_ptr)
+                if self.wrapper:
+                    self.wrapper.begin_capture(stream_ptr, batch_size, seq_len)
+                    self.wrapper.end_capture(stream_ptr)
 
-                # Execute graph using pointers
-                # We also pass the original python objects to ensure they are pinned/kept alive
-                self.wrapper.launch([stream_ptr], [input_ptr, output_ptr, input_tensor, output_tensor])
+                    # Execute graph using pointers
+                    # We also pass the original python objects to ensure they are pinned/kept alive
+                    self.wrapper.launch([stream_ptr], [input_ptr, output_ptr, input_tensor, output_tensor])
 
-                # We strictly synchronize to ensure logits are fully written by the GPU
-                if HAS_TORCH and torch.cuda.is_available():
-                    torch.cuda.synchronize()
+                    # We strictly synchronize to ensure logits are fully written by the GPU
+                    if HAS_TORCH and torch.cuda.is_available():
+                        torch.cuda.synchronize()
 
-                self.wrapper.invalidate()
+                    self.wrapper.invalidate()
+                else:
+                    # Routed execution path handling HardwareRouter
+                    self.engine.launch(input_ptr, output_ptr, seq_len)
+                    if HAS_TORCH and torch.cuda.is_available():
+                        torch.cuda.synchronize()
 
             # Argmax logic against actual tensor outputs
             # Retrieve the logits for the last token in the sequence

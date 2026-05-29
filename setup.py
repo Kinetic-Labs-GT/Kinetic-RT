@@ -39,7 +39,7 @@ if mock_hip:
 ext_modules = [
     Extension(
         'python.kinetic_rt._core',
-        ['bindings/python_bindings.cpp', 'src/AOTEngine.cpp', 'src/GraphWrapper.cpp', 'tests/mock_hip.cpp', 'src/Communicator.cpp', 'tests/mock_rccl.cpp'],
+        ['bindings/python_bindings.cpp', 'src/AOTEngine.cpp', 'src/GraphWrapper.cpp', 'tests/mock_hip.cpp', 'src/Communicator.cpp', 'tests/mock_rccl.cpp', 'src/tensorrt/TRTEngine.cpp'],
         include_dirs=[
             # Path to pybind11 headers
             get_pybind_include(),
@@ -110,6 +110,10 @@ setup(
         'torch',
         'triton',
         'transformers',
+        'fastapi',
+        'pydantic',
+        'uvicorn',
+        'sse_starlette',
     ],
     cmdclass={'build_ext': BuildExt},
     zip_safe=False,

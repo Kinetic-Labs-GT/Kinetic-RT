@@ -84,6 +84,7 @@ public:
     void load_model(const std::string& filepath);
 
     void launch(pybind11::object py_input, uintptr_t stream_ptr);
+    void launch_ptr(void* input_ptr, void* output_ptr, int seq_len);
     void synchronize_and_clear(uintptr_t stream_ptr);
 
 private:
