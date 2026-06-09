@@ -1,6 +1,9 @@
 import python.kinetic_rt as kinetic_rt
 import ctypes
 import threading
+import logging
+
+logger = logging.getLogger(__name__)
 
 def test_distributed_sharding():
     world_size = 2
@@ -44,7 +47,7 @@ def test_distributed_sharding():
         assert recv0[i] == 3.0, f"Expected 3.0, got {recv0[i]}"
         assert recv1[i] == 3.0, f"Expected 3.0, got {recv1[i]}"
 
-    print("Mathematical validation tests passed.")
+    logger.info("Mathematical validation tests passed.")
 
 if __name__ == "__main__":
     test_distributed_sharding()

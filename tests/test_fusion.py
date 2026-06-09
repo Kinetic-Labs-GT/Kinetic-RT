@@ -2,9 +2,11 @@ import os
 os.environ["TRITON_INTERPRET"] = "1"
 import torch
 import torch.nn.functional as F
-import os
 from python.kinetic_rt.fusion_forge import compile_and_serialize
 import python.kinetic_rt as kinetic_rt
+import logging
+
+logger = logging.getLogger(__name__)
 
 def rms_norm_ref(x, weight, eps=1e-5):
     # PyTorch reference for RMSNorm
@@ -58,7 +60,7 @@ def test_fusion_bridge():
 
     assert os.path.exists(output_filepath)
     os.remove(output_filepath)
-    print("Bridge serialization test passed.")
+    logger.info("Bridge serialization test passed.")
 
 def test_fusion_math():
     # Test Mathematical correctness against PyTorch reference
@@ -118,7 +120,7 @@ def test_fusion_math():
     torch.testing.assert_close(triton_k, ref_k, atol=1e-5, rtol=1e-5)
     torch.testing.assert_close(triton_v, ref_v, atol=1e-5, rtol=1e-5)
 
-    print("Mathematical validation tests passed.")
+    logger.info("Mathematical validation tests passed.")
 
 if __name__ == "__main__":
     test_fusion_bridge()
