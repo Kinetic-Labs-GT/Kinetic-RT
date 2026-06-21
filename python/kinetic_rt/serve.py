@@ -55,29 +55,49 @@ class KineticServer:
         # Persistent C++ background worker consuming the lock-free queue
         self.worker = InferenceWorker(self.queue, self.router)
 
-        # For non-streaming fallback only, we preserve direct generation access
+        # For metadata and configuration access
         self.runtime = KineticRuntime(self.router, None)
+
+        # Dictionary pinning active request tensors to prevent GC during GPU prefill execution
+        self.pinned_tensors = {}
 
         # Setup routing
         self.app.post("/v1/chat/completions")(self.openai_chat_completions)
         self.app.post("/v1/messages")(self.anthropic_messages)
 
     async def _async_generate(self, prompt: str, max_tokens: int, req_id: str) -> AsyncGenerator[str, None]:
-        # Genuine C++ Native lock-free async handoff
-        self.queue.submit(prompt, max_tokens, req_id)
+        # Genuine C++ Native lock-free async handoff with dynamic zero-copy mapping
+        if self.runtime.tokenizer:
+            tokens = self.runtime.tokenizer.encode(prompt)
+        else:
+            logger.warning("No tokenizer available, using byte-level fallback")
+            tokens = list(prompt.encode('utf-8'))
 
-        # We loop and poll the lock-free C++ ring buffer natively from asyncio loop
-        # ensuring the Python GIL is yielded naturally without blocking via `asyncio.sleep`
-        # and entirely avoiding dynamic thread pools in Python context.
-        while True:
-            resp = self.queue.poll()
-            if resp:
-                if resp["request_id"] == req_id:
-                    if resp["is_finished"]:
-                        break
-                    yield resp["token"]
-            else:
-                await asyncio.sleep(0.001)
+        import torch
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        input_tensor = torch.tensor(tokens, dtype=torch.int32, device=device)
+        input_ptr = input_tensor.data_ptr()
+        input_len = len(tokens)
+
+        # Pin the tensor in RAM/VRAM for the duration of this request
+        self.pinned_tensors[req_id] = input_tensor
+
+        try:
+            self.queue.submit(input_ptr, input_len, max_tokens, req_id)
+
+            # Loop and poll the lock-free C++ ring buffer natively from asyncio loop
+            while True:
+                resp = self.queue.poll()
+                if resp:
+                    if resp["request_id"] == req_id:
+                        if resp["is_finished"]:
+                            break
+                        yield resp["token"]
+                else:
+                    await asyncio.sleep(0.001)
+        finally:
+            # Safely release the pinned memory boundary after execution completes or yields
+            self.pinned_tensors.pop(req_id, None)
 
     async def openai_chat_completions(self, request: ChatCompletionRequest):
         prompt = " ".join([m.content for m in request.messages])
@@ -90,6 +110,8 @@ class KineticServer:
                 yield f"data: {json.dumps({'id': req_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': request.model, 'choices': [{'index': 0, 'delta': {'role': 'assistant'}, 'finish_reason': None}]})}\n\n"
 
                 async for token in self._async_generate(prompt, request.max_tokens or 10, req_id):
+                    if token == "<|endoftext|>":
+                        break
                     chunk = ChatCompletionChunk(
                         id="chatcmpl-123",
                         created=int(time.time()),
@@ -107,16 +129,24 @@ class KineticServer:
 
             return StreamingResponse(generate(), media_type="text/event-stream")
         else:
-            # Non-streaming fallback
-            full_text = await asyncio.to_thread(self.runtime.generate, prompt, request.max_tokens or 10)
+            import time
+            import uuid
+            req_id = str(uuid.uuid4())
+            tokens_list = []
+            async for token in self._async_generate(prompt, request.max_tokens or 10, req_id):
+                if token == "<|endoftext|>":
+                    break
+                tokens_list.append(token)
+            
+            full_text = "".join(tokens_list)
             return {
                 "id": "chatcmpl-123",
                 "object": "chat.completion",
-                "created": 1234567890,
+                "created": int(time.time()),
                 "model": request.model,
                 "choices": [{
                     "index": 0,
-                    "message": {"role": "assistant", "content": full_text[len(prompt):]},
+                    "message": {"role": "assistant", "content": full_text},
                     "finish_reason": "stop"
                 }]
             }
@@ -132,6 +162,8 @@ class KineticServer:
                 yield "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\n"
 
                 async for token in self._async_generate(prompt, request.max_tokens, req_id):
+                    if token == "<|endoftext|>":
+                        break
                     yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': token}})}\n\n"
 
                 yield "event: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\n"
@@ -139,13 +171,21 @@ class KineticServer:
 
             return StreamingResponse(generate(), media_type="text/event-stream")
         else:
-            full_text = await asyncio.to_thread(self.runtime.generate, prompt, request.max_tokens)
+            import uuid
+            req_id = str(uuid.uuid4())
+            tokens_list = []
+            async for token in self._async_generate(prompt, request.max_tokens, req_id):
+                if token == "<|endoftext|>":
+                    break
+                tokens_list.append(token)
+            
+            full_text = "".join(tokens_list)
             return {
                 "id": "msg_1",
                 "type": "message",
                 "role": "assistant",
                 "model": request.model,
-                "content": [{"type": "text", "text": full_text[len(prompt):]}]
+                "content": [{"type": "text", "text": full_text}]
             }
 
 def serve(port: int = 8000):
