@@ -75,8 +75,10 @@ PYBIND11_MODULE(_core, m) {
 
     py::class_<InferenceQueue>(m, "InferenceQueue")
         .def(py::init<>())
-        .def("submit", &InferenceQueue::submit, "Submit a request to the C++ engine natively",
-             py::arg("prompt"), py::arg("max_tokens"), py::arg("request_id"))
+        .def("submit", [](InferenceQueue& self, uintptr_t input_ptr, size_t input_len, int max_tokens, const std::string& request_id) {
+            self.submit(input_ptr, input_len, max_tokens, request_id);
+        }, "Submit a request to the C++ engine natively",
+             py::arg("input_ptr"), py::arg("input_len"), py::arg("max_tokens"), py::arg("request_id"))
         .def("poll", &InferenceQueue::poll, "Poll for stream responses via lock-free queue");
 
     py::class_<InferenceWorker>(m, "InferenceWorker")

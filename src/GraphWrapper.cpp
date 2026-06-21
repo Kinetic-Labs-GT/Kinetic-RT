@@ -1,4 +1,6 @@
 #include "GraphWrapper.h"
+#include <cstdlib>
+#include <cstring>
 
 #define CHECK_HIP(cmd) \
 do { \
@@ -12,10 +14,31 @@ do { \
 GraphWrapper::GraphWrapper() : graph_(nullptr), graph_exec_(nullptr), is_instantiated_(false), current_batch_size_(-1), current_seq_len_(-1) {
     CHECK_HIP(hipEventCreate(&sync_event_));
 
+    // Dynamic KV Cache configuration
+    kv_pool_size_ = 4096; // Default fallback
+    tokens_per_block_ = 16; // Default fallback
 
+    const char* pool_env = std::getenv("KINETIC_KV_POOL_SIZE");
+    const char* block_env = std::getenv("KINETIC_BLOCK_SIZE");
 
-    // Initialize PagedAttention BlockManager (e.g. 1024 blocks of size 16 tokens, assuming 4096 bytes per token representation)
-    block_manager_ = std::make_unique<BlockManager>(1024, 16, 4096);
+    if (pool_env != nullptr && std::strlen(pool_env) > 0) {
+        kv_pool_size_ = std::stoi(pool_env);
+    } else {
+        hipDeviceProp_t prop;
+        if (hipGetDeviceProperties(&prop, 0) == hipSuccess) {
+            kv_pool_size_ = prop.multiProcessorCount * 64;
+            if (kv_pool_size_ <= 0) {
+                kv_pool_size_ = 4096;
+            }
+        }
+    }
+
+    if (block_env != nullptr && std::strlen(block_env) > 0) {
+        tokens_per_block_ = std::stoi(block_env);
+    }
+
+    // Initialize PagedAttention BlockManager dynamically (assuming 4096 bytes per token representation)
+    block_manager_ = std::make_unique<BlockManager>(kv_pool_size_, tokens_per_block_, 4096);
 
     // Aggressively pre-allocate event pool to avoid allocation overhead during launch
     for (size_t i = 0; i < POOL_SIZE - 1; ++i) {
@@ -114,8 +137,7 @@ void GraphWrapper::begin_capture(uintptr_t stream_ptr, int batch_size, int seq_l
         current_seq_len_ = seq_len;
 
         // PagedAttention: Compute needed blocks based on sequence length
-        int tokens_per_block = 16;
-        int blocks_needed = (seq_len + tokens_per_block - 1) / tokens_per_block;
+        int blocks_needed = (seq_len + tokens_per_block_ - 1) / tokens_per_block_;
 
         // Allocate physical blocks dynamically
         for (int i = current_block_table_.size(); i < blocks_needed; ++i) {

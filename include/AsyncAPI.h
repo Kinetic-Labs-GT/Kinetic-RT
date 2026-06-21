@@ -5,11 +5,13 @@
 #include <queue>
 #include <mutex>
 #include <condition_variable>
+#include <cstdint>
 #include <pybind11/pybind11.h>
 #include "GraphWrapper.h" // For LockFreeRingBuffer
 
 struct InferenceRequest {
-    std::string prompt;
+    uintptr_t input_ptr;
+    size_t input_len;
     int max_tokens;
     std::string request_id;
 };
@@ -24,8 +26,8 @@ class InferenceQueue {
 public:
     InferenceQueue() {}
 
-    void submit(const std::string& prompt, int max_tokens, const std::string& request_id) {
-        InferenceRequest req{prompt, max_tokens, request_id};
+    void submit(uintptr_t input_ptr, size_t input_len, int max_tokens, const std::string& request_id) {
+        InferenceRequest req{input_ptr, input_len, max_tokens, request_id};
         while(!request_queue_.push(req)) {} // Spin until pushed (assuming capacity is large enough)
     }
 
@@ -80,11 +82,14 @@ private:
                 // Pre-allocate a 4-byte buffer for the output token ID
                 int32_t output_token_id = 0;
 
+                void* current_input = reinterpret_cast<void*>(req.input_ptr);
+                size_t current_len = req.input_len;
+                size_t current_byte_size = req.input_len * sizeof(int32_t);
+
                 for (int i = 0; i < req.max_tokens; ++i) {
                     // Launch native inference via HardwareRouter
-                    // input_ptr is dynamically mocked from string representation for purely structural C++ standalone parsing
-                    // output_ptr points to our local stack variable output_token_id.
-                    router_.launch((void*)req.prompt.c_str(), (void*)&output_token_id, req.prompt.size(), sizeof(int32_t));
+                    // input_ptr is a direct GPU memory pointer (data_ptr()) for the initial prefill layer
+                    router_.launch(current_input, (void*)&output_token_id, current_len, current_byte_size);
 
                     // In a true end-to-end flow with CUDA, we would synchronize the default stream here.
                     // For host-side execution tests, output_token_id is updated directly.
@@ -100,6 +105,11 @@ private:
                     resp.token = std::string(1, char_token);
                     resp.is_finished = (i == req.max_tokens - 1);
                     queue_.push_response(resp);
+
+                    // Update input for subsequent autoregressive generation (decode) steps
+                    current_input = reinterpret_cast<void*>(&output_token_id);
+                    current_len = 1;
+                    current_byte_size = sizeof(int32_t);
                 }
             } else {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));

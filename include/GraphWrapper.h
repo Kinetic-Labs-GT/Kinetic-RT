@@ -185,6 +185,9 @@ private:
     std::unique_ptr<BlockManager> block_manager_;
     std::vector<int> current_block_table_;
 
+    int kv_pool_size_;
+    int tokens_per_block_;
+
     // Mutex for thread safety
     mutable std::recursive_mutex engine_mutex_;
 };
