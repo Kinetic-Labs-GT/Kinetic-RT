@@ -83,9 +83,19 @@ public:
     // Load from .kin and initialize the engine
     void load_model(const std::string& filepath);
 
-    void launch(pybind11::object py_input, uintptr_t stream_ptr);
-    void launch_ptr(void* input_ptr, void* output_ptr, int seq_len);
+    void launch(pybind11::object py_input, uintptr_t stream_ptr, size_t byte_size = 0);
+    void launch_ptr(void* input_ptr, void* output_ptr, int seq_len, size_t byte_size = 0);
     void synchronize_and_clear(uintptr_t stream_ptr);
+
+    // Compute FNV-1a 64-bit hash for binary content
+    static uint64_t compute_fnv1a_hash(const std::vector<uint8_t>& data) {
+        uint64_t hash = 0xcbf29ce484222325ULL; // FNV offset basis
+        for (uint8_t byte : data) {
+            hash ^= byte;
+            hash *= 0x100000001b3ULL; // FNV prime
+        }
+        return hash;
+    }
 
 private:
     SmartAutotuner autotuner_;
@@ -93,6 +103,8 @@ private:
     hipModule_t module_;
     std::recursive_mutex engine_mutex_;
     std::vector<pybind11::object> pinned_buffers_;
+    void* device_buffer_ = nullptr;
+    size_t device_buffer_size_ = 0;
 
     void load_kernel(const std::vector<uint8_t>& binary_data, const std::string& kinetic_target);
     void validate_elf_structure(const std::vector<uint8_t>& binary_data, const std::string& kinetic_target) const;

@@ -19,6 +19,8 @@ typedef int hipError_t;
 
 struct hipDeviceProp_t {
     char gcnArchName[256];
+    size_t sharedMemPerBlock;
+    int multiProcessorCount;
 };
 
 struct MockHipState {
@@ -45,7 +47,7 @@ struct MockHipState {
 
     // For autotuner mock
     float mock_elapsed_time = 1.0f;
-    std::string mock_gcn_arch_name = "cpu";
+    std::string mock_gcn_arch_name = "CPU";
 
     void reset() {
         stream_capture_calls = 0;
@@ -67,7 +69,7 @@ struct MockHipState {
         is_graph_in_flight = false;
         in_flight_graph = nullptr;
         mock_elapsed_time = 1.0f;
-        mock_gcn_arch_name = "cpu";
+        mock_gcn_arch_name = "CPU";
     }
 };
 
@@ -195,5 +197,7 @@ inline hipError_t hipEventDestroy(hipEvent_t event) {
 inline hipError_t hipGetDeviceProperties(hipDeviceProp_t* prop, int deviceId) {
     global_mock_hip_state.get_device_properties_calls++;
     snprintf(prop->gcnArchName, 256, "%s", global_mock_hip_state.mock_gcn_arch_name.c_str());
+    prop->sharedMemPerBlock = 65536;
+    prop->multiProcessorCount = 60;
     return hipSuccess;
 }

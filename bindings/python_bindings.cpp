@@ -40,10 +40,10 @@ PYBIND11_MODULE(_core, m) {
              py::arg("output_filepath"), py::arg("stream_obj"), py::arg("kinetic_target"))
         .def("load_model", &AOTEngine::load_model, "Load a compiled .kin model",
              py::arg("filepath"))
-        .def("launch", [](AOTEngine& self, py::object py_input, py::object stream_obj) {
-            self.launch(py_input, py::cast<uintptr_t>(stream_obj));
+        .def("launch", [](AOTEngine& self, py::object py_input, py::object stream_obj, size_t byte_size) {
+            self.launch(py_input, py::cast<uintptr_t>(stream_obj), byte_size);
         }, "Launch AOT kernel asynchronously with pinned buffers",
-             py::arg("py_input"), py::arg("stream_obj"))
+             py::arg("py_input"), py::arg("stream_obj"), py::arg("byte_size") = 0)
         .def("synchronize_and_clear", [](AOTEngine& self, py::object stream_obj) {
             self.synchronize_and_clear(py::cast<uintptr_t>(stream_obj));
         }, "Synchronize stream and clear pinned buffers",
@@ -69,9 +69,9 @@ PYBIND11_MODULE(_core, m) {
     py::class_<HardwareRouter>(m, "HardwareRouter")
         .def(py::init<>())
         .def("load_model", &HardwareRouter::load_model, "Load a compiled .kin model or TensorRT plan", py::arg("filepath"))
-        .def("launch", [](HardwareRouter& self, uintptr_t input_ptr, uintptr_t output_ptr, int seq_len) {
-            self.launch(reinterpret_cast<void*>(input_ptr), reinterpret_cast<void*>(output_ptr), seq_len);
-        }, "Launch inference through the hardware-aware router via pointers", py::arg("input_ptr"), py::arg("output_ptr"), py::arg("seq_len"));
+        .def("launch", [](HardwareRouter& self, uintptr_t input_ptr, uintptr_t output_ptr, int seq_len, size_t byte_size) {
+            self.launch(reinterpret_cast<void*>(input_ptr), reinterpret_cast<void*>(output_ptr), seq_len, byte_size);
+        }, "Launch inference through the hardware-aware router via pointers", py::arg("input_ptr"), py::arg("output_ptr"), py::arg("seq_len"), py::arg("byte_size") = 0);
 
     py::class_<InferenceQueue>(m, "InferenceQueue")
         .def(py::init<>())

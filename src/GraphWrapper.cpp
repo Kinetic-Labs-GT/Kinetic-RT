@@ -12,8 +12,7 @@ do { \
 GraphWrapper::GraphWrapper() : graph_(nullptr), graph_exec_(nullptr), is_instantiated_(false), current_batch_size_(-1), current_seq_len_(-1) {
     CHECK_HIP(hipEventCreate(&sync_event_));
 
-    // Initialize persistent thread pool with exactly 4 dedicated submission threads
-    execution_pool_ = std::make_unique<ThreadPool>(4);
+
 
     // Initialize PagedAttention BlockManager (e.g. 1024 blocks of size 16 tokens, assuming 4096 bytes per token representation)
     block_manager_ = std::make_unique<BlockManager>(1024, 16, 4096);
@@ -97,7 +96,7 @@ void GraphWrapper::cleanup_in_flight_states() {
 }
 
 bool GraphWrapper::is_valid(int batch_size, int seq_len) const {
-    std::lock_guard<std::recursive_mutex> lock(const_cast<GraphWrapper*>(this)->engine_mutex_);
+    std::lock_guard<std::recursive_mutex> lock(engine_mutex_);
     if (!is_instantiated_) {
         return false;
     }

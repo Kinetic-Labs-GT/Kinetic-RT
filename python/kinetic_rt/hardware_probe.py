@@ -1,6 +1,4 @@
-import subprocess
 import os
-import torch
 
 def probe_hardware():
     forced_target = os.environ.get("KINETIC_TARGET")

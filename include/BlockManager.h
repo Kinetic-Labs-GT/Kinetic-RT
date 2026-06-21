@@ -30,7 +30,8 @@ class BlockManager {
 public:
     // PagedAttention BlockManager managing a massive contiguous VRAM allocation
     BlockManager(int num_blocks, int tokens_per_block, int token_byte_size)
-        : tokens_per_block_(tokens_per_block), vram_pool_ptr_(nullptr) {
+        : tokens_per_block_(tokens_per_block), token_byte_size_(token_byte_size),
+          num_blocks_(num_blocks), vram_pool_ptr_(nullptr) {
 
         size_t block_bytes = tokens_per_block * token_byte_size;
         size_t total_vram_pool_size = num_blocks * block_bytes;
@@ -71,8 +72,11 @@ public:
 
     void free_block(int id) {
         std::lock_guard<std::mutex> lock(mutex_);
-        // Recalculate block pointer safely mathematically avoiding fragmentation
-        size_t block_bytes = tokens_per_block_ * 4096; // Example scalar
+        if (id < 0 || id >= num_blocks_) {
+            throw std::runtime_error("BlockManager::free_block: block ID " + std::to_string(id) + " out of range [0, " + std::to_string(num_blocks_) + ")");
+        }
+        // Recalculate block pointer using stored token_byte_size_
+        size_t block_bytes = static_cast<size_t>(tokens_per_block_) * token_byte_size_;
         char* pool_offset = reinterpret_cast<char*>(vram_pool_ptr_);
         free_blocks_.push_back({id, tokens_per_block_, 0, reinterpret_cast<void*>(pool_offset + (id * block_bytes))});
     }
@@ -84,6 +88,8 @@ public:
 private:
     std::vector<Block> free_blocks_;
     int tokens_per_block_;
+    int token_byte_size_;
+    int num_blocks_;
     std::mutex mutex_;
     void* vram_pool_ptr_;
 };

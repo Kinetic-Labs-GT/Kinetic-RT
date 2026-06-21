@@ -179,13 +179,12 @@ private:
     static constexpr size_t POOL_SIZE = 2048;
     LockFreeRingBuffer<hipEvent_t, POOL_SIZE> event_pool_;
 
-    // Persistent thread pool for execution
-    std::unique_ptr<ThreadPool> execution_pool_;
+
 
     // PagedAttention Block Manager
     std::unique_ptr<BlockManager> block_manager_;
     std::vector<int> current_block_table_;
 
     // Mutex for thread safety
-    std::recursive_mutex engine_mutex_;
+    mutable std::recursive_mutex engine_mutex_;
 };

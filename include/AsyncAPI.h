@@ -84,7 +84,7 @@ private:
                     // Launch native inference via HardwareRouter
                     // input_ptr is dynamically mocked from string representation for purely structural C++ standalone parsing
                     // output_ptr points to our local stack variable output_token_id.
-                    router_.launch((void*)req.prompt.c_str(), (void*)&output_token_id, req.prompt.size());
+                    router_.launch((void*)req.prompt.c_str(), (void*)&output_token_id, req.prompt.size(), sizeof(int32_t));
 
                     // In a true end-to-end flow with CUDA, we would synchronize the default stream here.
                     // For host-side execution tests, output_token_id is updated directly.

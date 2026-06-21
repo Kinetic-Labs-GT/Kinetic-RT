@@ -36,14 +36,14 @@ public:
         }
     }
 
-    void launch(void* input_ptr, void* output_ptr, int seq_len) {
+    void launch(void* input_ptr, void* output_ptr, int seq_len, size_t byte_size = 0) {
         if (backend_ == Backend::NVIDIA) {
             // Mapping buffer pointer natively into TRT execution
             trt_engine_.launch(input_ptr, output_ptr, seq_len);
         } else {
             // AOT Engine launch natively accepts pybind objects for lifecycle pinning.
             // When falling back to pointer mapping via Router, we construct an explicit execution path.
-            aot_engine_.launch_ptr(input_ptr, output_ptr, seq_len);
+            aot_engine_.launch_ptr(input_ptr, output_ptr, seq_len, byte_size);
         }
     }
 

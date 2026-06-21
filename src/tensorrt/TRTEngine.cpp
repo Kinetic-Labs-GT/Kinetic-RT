@@ -5,11 +5,11 @@
 class TRTEngine::Impl {
 public:
     void load_model(const std::string& filepath) {
-        std::cout << "[TRTEngine] Mock loading TensorRT plan: " << filepath << std::endl;
+        std::cerr << "[TRTEngine-Mock] Loading TensorRT plan: " << filepath << std::endl;
     }
     void launch(void* input_ptr, void* output_ptr, int seq_len) {
         // Mock launch execution
-        std::cout << "[TRTEngine] Mock launching TensorRT engine" << std::endl;
+        std::cerr << "[TRTEngine-Mock] Launching TensorRT engine" << std::endl;
     }
 };
 #else

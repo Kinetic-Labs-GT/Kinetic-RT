@@ -1,5 +1,8 @@
 from contextlib import contextmanager
 from typing import List
+import logging
+
+logger = logging.getLogger(__name__)
 
 try:
     import torch
@@ -15,7 +18,7 @@ class StreamContext:
         else:
             class MockStream:
                 def cuda_stream(self):
-                    return 0x1000
+                    return 0  # Null stream (default stream in CUDA/HIP)
             self.stream = MockStream()
 
     def __enter__(self):
@@ -31,11 +34,21 @@ class StreamContext:
 import os
 
 class KineticRuntime:
-    def __init__(self, engine, wrapper=None):
+    def __init__(self, engine, wrapper=None, tokenizer_name=None):
         self.engine = engine # Acts as router if wrapper is None
         self.wrapper = wrapper
         self.tp_degree = 1
         self.model_paths = []
+
+        # FIX 4: Load a real tokenizer when available
+        self.tokenizer = None
+        _tok_name = tokenizer_name or "HuggingFaceTB/SmolLM2-135M"
+        try:
+            from transformers import AutoTokenizer
+            self.tokenizer = AutoTokenizer.from_pretrained(_tok_name)
+            logger.info(f"Loaded tokenizer: {_tok_name}")
+        except (ImportError, Exception) as exc:
+            logger.warning(f"Could not load tokenizer ({exc}); will use byte-level fallback")
 
     def load_model(self, model_dir: str):
         import glob
@@ -66,7 +79,7 @@ class KineticRuntime:
             # We assume in a real environment we have one shard per TP degree if TP > 1,
             # or maybe one big file and we load it differently.
             # For simplicity, if we found files, we map what we have.
-            pass
+            logger.warning(f"Found {len(self.model_paths)} shard files but TP degree is {self.tp_degree}. Some shards may not be loaded.")
 
         # In a real environment we would load the shards into respective GPUs
         for i in range(min(self.tp_degree, len(self.model_paths))):
@@ -79,10 +92,14 @@ class KineticRuntime:
         if not HAS_TORCH:
             raise RuntimeError("PyTorch is required for generating text.")
 
-        # Dummy tokenization loop: Tokenize -> Load into Engine -> Launch Graph -> Fetch Logits -> Argmax -> Append Token
+        # Tokenize -> Load into Engine -> Launch Graph -> Fetch Logits -> Argmax -> Append Token
 
-        # Tokenize (mock ASCII encoding)
-        tokens = [ord(c) for c in prompt]
+        # FIX 4: Use real tokenizer when available, byte-level fallback otherwise
+        if self.tokenizer:
+            tokens = self.tokenizer.encode(prompt)
+        else:
+            logger.warning("No tokenizer available, using byte-level fallback")
+            tokens = list(prompt.encode('utf-8'))
 
         vocab_size = 50257 # Standard GPT-2/SmolLM vocabulary size
 
@@ -99,7 +116,7 @@ class KineticRuntime:
             output_ptr = self._convert_tensor(output_tensor)
 
             with StreamContext() as stream:
-                stream_ptr = stream.cuda_stream() if hasattr(stream, "cuda_stream") else 0x1000
+                stream_ptr = stream.cuda_stream() if hasattr(stream, "cuda_stream") else 0
 
                 batch_size = 1
                 seq_len = len(tokens)
@@ -130,5 +147,8 @@ class KineticRuntime:
             argmax_idx = torch.argmax(last_token_logits).item()
             tokens.append(argmax_idx)
 
-        # Basic ascii decoding for the resulting tokenized sequence
-        return "".join(chr(t % 256) for t in tokens)
+        # Decode the generated token sequence
+        if self.tokenizer:
+            return self.tokenizer.decode(tokens)
+        else:
+            return bytes(t % 256 for t in tokens).decode('utf-8', errors='replace')

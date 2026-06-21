@@ -190,6 +190,15 @@ AOTEngine::~AOTEngine() {
         hipModuleUnload(module_);
         module_ = nullptr;
     }
+    if (device_buffer_ != nullptr) {
+#if defined(MOCK_HIP)
+        free(device_buffer_);
+#else
+        hipFree(device_buffer_);
+#endif
+        device_buffer_ = nullptr;
+        device_buffer_size_ = 0;
+    }
 }
 
 void AOTEngine::compile_ahead_of_time(const std::string& output_filepath, uintptr_t stream_ptr, const std::string& kinetic_target) {
@@ -242,14 +251,23 @@ void AOTEngine::compile_ahead_of_time(const std::string& output_filepath, uintpt
         // In a fully integrated execution, PyBind evaluates the `torch.fx.Graph` structure
         // and maps it. For native C++ boundary consistency, we extract a hash map of node ops.
         // Using a structural 3-byte serialization as defined by Triton/FX constraints.
-        op_graph_data = {0x01, 0x01, 0x01};
+        // Derive op_graph_data from compilation result if available
+        pybind11::object graph_data_obj = fusion_forge.attr("get_op_graph_data")(kinetic_target);
+        std::string graph_str = graph_data_obj.cast<std::string>();
+        op_graph_data.assign(graph_str.begin(), graph_str.end());
     } catch (pybind11::error_already_set& e) {
         std::cerr << "Native Triton compilation failed: " << e.what() << std::endl;
         throw std::runtime_error("Triton Native C++ Compilation Failed");
     }
 #endif
 
-    uint64_t weights_hash = 123456789;
+    // If op_graph_data is still empty (e.g., NO_PYBIND), derive from kernel binary
+    if (op_graph_data.empty() && !compiled_kernel_binary.empty()) {
+        op_graph_data = compiled_kernel_binary; // Use kernel binary as graph data fallback
+    }
+
+    // Compute weights_hash from actual kernel binary content using FNV-1a
+    uint64_t weights_hash = compute_fnv1a_hash(compiled_kernel_binary);
     serializer_.save_kin_file(output_filepath, device_id, kinetic_target, weights_hash, op_graph_data, compiled_kernel_binary);
 }
 
@@ -281,12 +299,14 @@ void AOTEngine::validate_elf_structure(const std::vector<uint8_t>& binary_data, 
 
     uint16_t e_machine = binary_data[18] | (binary_data[19] << 8);
 
-    // Cross-platform interlock check
-#ifdef __HIP_PLATFORM_NVIDIA__
-    uint16_t expected_em = 0xBE; // EM_CUDA (190)
-#else
-    uint16_t expected_em = 0xE0; // EM_AMDGPU (224)
-#endif
+    // Runtime platform detection based on kinetic_target string prefix
+    // instead of compile-time #ifdef, so cross-compiled .kin files are validated correctly
+    uint16_t expected_em;
+    if (kinetic_target.find("CUDA") == 0 || kinetic_target.find("sm") != std::string::npos) {
+        expected_em = 0xBE; // EM_CUDA (190)
+    } else {
+        expected_em = 0xE0; // EM_AMDGPU (224)
+    }
 
     // Strictly check against device ID and exact kinetic_target without prefix mangling
     if (kinetic_target != serializer_.get_loaded_kinetic_target()) {
@@ -311,21 +331,40 @@ void AOTEngine::load_kernel(const std::vector<uint8_t>& binary_data, const std::
     CHECK_HIP(hipModuleLoadData(&module_, binary_data.data()));
 }
 
-void AOTEngine::launch(pybind11::object py_input, uintptr_t stream_ptr) {
+void AOTEngine::launch(pybind11::object py_input, uintptr_t stream_ptr, size_t byte_size) {
     std::lock_guard<std::recursive_mutex> lock(engine_mutex_);
     hipStream_t stream = reinterpret_cast<hipStream_t>(stream_ptr);
 
     // Pin the buffer so it won't be garbage collected
     pinned_buffers_.push_back(py_input);
 
-    // Mock an async hipMemcpy
-    void* input_ptr = PyLong_AsVoidPtr(py_input.ptr());
-    void* gpu_ptr = nullptr; // Dummy gpu ptr
-    size_t size = 1024; // Dummy size
-#if defined(MOCK_HIP)
-    // mock_hip.h does not define hipMemcpyAsync or hipMemcpyHostToDevice, we just mock the sync
+    // Extract host pointer from Python integer via pybind11 cast
+    void* input_ptr = reinterpret_cast<void*>(pybind11::cast<uintptr_t>(py_input));
+
+    // Allocate/reuse device buffer
+    if (device_buffer_ == nullptr || device_buffer_size_ < byte_size) {
+        if (device_buffer_ != nullptr) {
+#if !defined(MOCK_HIP)
+            hipFree(device_buffer_);
 #else
-    CHECK_HIP(hipMemcpyAsync(gpu_ptr, input_ptr, size, hipMemcpyHostToDevice, stream));
+            free(device_buffer_);
+#endif
+        }
+#if defined(MOCK_HIP)
+        device_buffer_ = malloc(byte_size);
+#else
+        CHECK_HIP(hipMalloc(&device_buffer_, byte_size));
+#endif
+        device_buffer_size_ = byte_size;
+    }
+
+#if defined(MOCK_HIP)
+    // mock_hip.h does not define hipMemcpyAsync or hipMemcpyHostToDevice, we just mock the copy
+    if (input_ptr != nullptr && device_buffer_ != nullptr && byte_size > 0) {
+        std::memcpy(device_buffer_, input_ptr, byte_size);
+    }
+#else
+    CHECK_HIP(hipMemcpyAsync(device_buffer_, input_ptr, byte_size, hipMemcpyHostToDevice, stream));
 #endif
 
     // Note: Do not synchronously clear pinned buffers here, since this is an async
@@ -333,18 +372,22 @@ void AOTEngine::launch(pybind11::object py_input, uintptr_t stream_ptr) {
     // manual sync method.
 }
 
-void AOTEngine::launch_ptr(void* input_ptr, void* output_ptr, int seq_len) {
+void AOTEngine::launch_ptr(void* input_ptr, void* output_ptr, int seq_len, size_t byte_size) {
     std::lock_guard<std::recursive_mutex> lock(engine_mutex_);
+
+    if (byte_size == 0) {
+        byte_size = sizeof(int32_t); // Minimum fallback for single-token operations
+    }
 
     // PagedAttention Block Integration
     // We bind directly to the native GraphWrapper/TRT engine pipelines here
 #if !defined(MOCK_HIP)
     // Synchronous execution path native to HIP when bypassing pybind objects
-    CHECK_HIP(hipMemcpy(output_ptr, input_ptr, sizeof(int32_t), hipMemcpyDeviceToHost));
+    CHECK_HIP(hipMemcpy(output_ptr, input_ptr, byte_size, hipMemcpyDeviceToHost));
 #else
     // Pure mock environment execution struct
     if (output_ptr != nullptr && input_ptr != nullptr) {
-        *reinterpret_cast<int32_t*>(output_ptr) = 1; // Example token write
+        std::memcpy(output_ptr, input_ptr, std::min(byte_size, static_cast<size_t>(sizeof(int32_t))));
     }
 #endif
 }
