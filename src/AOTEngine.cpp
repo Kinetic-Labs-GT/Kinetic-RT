@@ -2,6 +2,10 @@
 #include <fstream>
 #include <cstring>
 #include <endian.h>
+#include <algorithm>
+#include <cstdlib>
+#include <sstream>
+#include <cctype>
 
 #define CHECK_HIP(cmd) \
 do { \
@@ -190,6 +194,8 @@ AOTEngine::~AOTEngine() {
         hipModuleUnload(module_);
         module_ = nullptr;
     }
+    kernel_functions_.clear();
+    default_kernel_name_.clear();
     if (device_buffer_ != nullptr) {
 #if defined(MOCK_HIP)
         free(device_buffer_);
@@ -327,69 +333,148 @@ void AOTEngine::load_kernel(const std::vector<uint8_t>& binary_data, const std::
         CHECK_HIP(hipModuleUnload(module_));
         module_ = nullptr;
     }
+    kernel_functions_.clear();
+    default_kernel_name_.clear();
+
     // hipModuleLoadData expects the binary image.
     CHECK_HIP(hipModuleLoadData(&module_, binary_data.data()));
+
+    std::vector<std::string> candidate_symbols;
+    const char* env_symbols = std::getenv("KINETIC_KERNEL_SYMBOLS");
+    if (env_symbols != nullptr && std::strlen(env_symbols) > 0) {
+        std::stringstream ss(env_symbols);
+        std::string symbol;
+        while (std::getline(ss, symbol, ',')) {
+            symbol.erase(std::remove_if(symbol.begin(), symbol.end(), [](unsigned char c) { return std::isspace(c); }), symbol.end());
+            if (!symbol.empty()) {
+                candidate_symbols.push_back(symbol);
+            }
+        }
+    }
+
+    if (candidate_symbols.empty()) {
+        candidate_symbols = {"fused_rmsnorm_qkv_rope", "kernel", "triton_kernel", "fused_kernel", "matmul_kernel", "main"};
+    }
+
+    for (const auto& symbol : candidate_symbols) {
+        hipFunction_t function = nullptr;
+        hipError_t status = hipModuleGetFunction(&function, module_, symbol.c_str());
+        if (status == hipSuccess && function != nullptr) {
+            kernel_functions_[symbol] = function;
+            if (default_kernel_name_.empty()) {
+                default_kernel_name_ = symbol;
+            }
+        }
+    }
+
+    if (kernel_functions_.empty()) {
+        throw std::runtime_error("Cannot load kernel: no requested HIP kernel symbols were found in module.");
+    }
 }
 
-void AOTEngine::launch(pybind11::object py_input, uintptr_t stream_ptr, size_t byte_size) {
+void AOTEngine::launch(const KernelLaunchDescriptor& descriptor, uintptr_t stream_ptr) {
     std::lock_guard<std::recursive_mutex> lock(engine_mutex_);
-    hipStream_t stream = reinterpret_cast<hipStream_t>(stream_ptr);
 
-    // Pin the buffer so it won't be garbage collected
-    pinned_buffers_.push_back(py_input);
+    if (module_ == nullptr) {
+        throw std::runtime_error("Cannot launch AOT kernel: HIP module is not loaded.");
+    }
+    if (descriptor.input_ptr == nullptr || descriptor.output_ptr == nullptr) {
+        throw std::runtime_error("Cannot launch AOT kernel: input and output buffers must be non-null.");
+    }
 
-    // Extract host pointer from Python integer via pybind11 cast
-    void* input_ptr = reinterpret_cast<void*>(pybind11::cast<uintptr_t>(py_input));
+    const std::string& kernel_name = descriptor.kernel_name.empty() ? default_kernel_name_ : descriptor.kernel_name;
+    auto function_it = kernel_functions_.find(kernel_name);
+    if (function_it == kernel_functions_.end() || function_it->second == nullptr) {
+        throw std::runtime_error("Cannot launch AOT kernel: selected HIP function is not loaded: " + kernel_name);
+    }
 
-    // Allocate/reuse device buffer
-    if (device_buffer_ == nullptr || device_buffer_size_ < byte_size) {
-        if (device_buffer_ != nullptr) {
-#if !defined(MOCK_HIP)
-            hipFree(device_buffer_);
-#else
-            free(device_buffer_);
-#endif
+    unsigned int block_x = descriptor.block_x;
+    unsigned int block_y = descriptor.block_y;
+    unsigned int block_z = descriptor.block_z;
+    unsigned int grid_x = descriptor.grid_x;
+    unsigned int grid_y = descriptor.grid_y;
+    unsigned int grid_z = descriptor.grid_z;
+
+    if (block_x == 0 || block_y == 0 || block_z == 0 || grid_y == 0 || grid_z == 0) {
+        throw std::runtime_error("Cannot launch AOT kernel: grid and block dimensions must be non-zero.");
+    }
+    if (grid_x == 0) {
+        int work_items = descriptor.seq_len > 0 ? descriptor.seq_len : static_cast<int>((descriptor.byte_size + sizeof(int32_t) - 1) / sizeof(int32_t));
+        if (work_items <= 0) {
+            throw std::runtime_error("Cannot launch AOT kernel: grid_x must be specified when seq_len and byte_size are empty.");
         }
-#if defined(MOCK_HIP)
-        device_buffer_ = malloc(byte_size);
-#else
-        CHECK_HIP(hipMalloc(&device_buffer_, byte_size));
-#endif
-        device_buffer_size_ = byte_size;
+        grid_x = static_cast<unsigned int>((work_items + block_x - 1) / block_x);
     }
 
-#if defined(MOCK_HIP)
-    // mock_hip.h does not define hipMemcpyAsync or hipMemcpyHostToDevice, we just mock the copy
-    if (input_ptr != nullptr && device_buffer_ != nullptr && byte_size > 0) {
-        std::memcpy(device_buffer_, input_ptr, byte_size);
-    }
-#else
-    CHECK_HIP(hipMemcpyAsync(device_buffer_, input_ptr, byte_size, hipMemcpyHostToDevice, stream));
-#endif
+    hipStream_t stream = reinterpret_cast<hipStream_t>(stream_ptr);
+    void* input_ptr = descriptor.input_ptr;
+    void* output_ptr = descriptor.output_ptr;
+    int seq_len = descriptor.seq_len;
+    size_t byte_size = descriptor.byte_size;
 
-    // Note: Do not synchronously clear pinned buffers here, since this is an async
-    // operation. In a real engine, we'd clear them in an event callback or on a
-    // manual sync method.
+    if (kernel_name == "fused_rmsnorm_qkv_rope") {
+        if (descriptor.qkv_weight_ptr == nullptr || descriptor.qkv_bias_ptr == nullptr ||
+            descriptor.rms_weight_ptr == nullptr || descriptor.freqs_cos_ptr == nullptr ||
+            descriptor.freqs_sin_ptr == nullptr || descriptor.k_output_ptr == nullptr ||
+            descriptor.v_output_ptr == nullptr) {
+            throw std::runtime_error("Cannot launch fused_rmsnorm_qkv_rope: descriptor is missing required weight, frequency, or K/V output buffers.");
+        }
+
+        if (descriptor.seq_len <= 0 || descriptor.d_model <= 0 || descriptor.n_heads <= 0 || descriptor.head_dim <= 0) {
+            throw std::runtime_error("Cannot launch fused_rmsnorm_qkv_rope: seq_len, d_model, n_heads, and head_dim must be positive.");
+        }
+
+        void* qkv_weight_ptr = descriptor.qkv_weight_ptr;
+        void* qkv_bias_ptr = descriptor.qkv_bias_ptr;
+        void* rms_weight_ptr = descriptor.rms_weight_ptr;
+        void* freqs_cos_ptr = descriptor.freqs_cos_ptr;
+        void* freqs_sin_ptr = descriptor.freqs_sin_ptr;
+        void* k_output_ptr = descriptor.k_output_ptr;
+        void* v_output_ptr = descriptor.v_output_ptr;
+        int d_model = descriptor.d_model;
+        int n_heads = descriptor.n_heads;
+        int head_dim = descriptor.head_dim;
+        float eps = descriptor.eps;
+        int stride_x_seq = descriptor.stride_x_seq;
+        int stride_x_dim = descriptor.stride_x_dim;
+        int stride_w_out = descriptor.stride_w_out;
+        int stride_w_in = descriptor.stride_w_in;
+        int stride_q_seq = descriptor.stride_q_seq;
+        int stride_q_dim = descriptor.stride_q_dim;
+        int stride_k_seq = descriptor.stride_k_seq;
+        int stride_k_dim = descriptor.stride_k_dim;
+        int stride_v_seq = descriptor.stride_v_seq;
+        int stride_v_dim = descriptor.stride_v_dim;
+        void* fused_kernel_params[] = {&input_ptr, &qkv_weight_ptr, &qkv_bias_ptr, &rms_weight_ptr,
+                                      &freqs_cos_ptr, &freqs_sin_ptr, &output_ptr, &k_output_ptr,
+                                      &v_output_ptr, &seq_len, &d_model, &n_heads, &head_dim, &eps,
+                                      &stride_x_seq, &stride_x_dim, &stride_w_out, &stride_w_in,
+                                      &stride_q_seq, &stride_q_dim, &stride_k_seq, &stride_k_dim,
+                                      &stride_v_seq, &stride_v_dim};
+        CHECK_HIP(hipModuleLaunchKernel(function_it->second, grid_x, grid_y, grid_z,
+                                        block_x, block_y, block_z, descriptor.shared_mem_bytes,
+                                        stream, fused_kernel_params, nullptr));
+        return;
+    }
+
+    void* kernel_params[] = {&input_ptr, &output_ptr, &seq_len, &byte_size};
+
+    CHECK_HIP(hipModuleLaunchKernel(function_it->second, grid_x, grid_y, grid_z,
+                                    block_x, block_y, block_z, descriptor.shared_mem_bytes,
+                                    stream, kernel_params, nullptr));
+}
+
+void AOTEngine::launch(void* input_ptr, void* output_ptr, int seq_len, uintptr_t stream_ptr, size_t byte_size) {
+    KernelLaunchDescriptor descriptor;
+    descriptor.input_ptr = input_ptr;
+    descriptor.output_ptr = output_ptr;
+    descriptor.seq_len = seq_len;
+    descriptor.byte_size = byte_size;
+    launch(descriptor, stream_ptr);
 }
 
 void AOTEngine::launch_ptr(void* input_ptr, void* output_ptr, int seq_len, size_t byte_size) {
-    std::lock_guard<std::recursive_mutex> lock(engine_mutex_);
-
-    if (byte_size == 0) {
-        byte_size = sizeof(int32_t); // Minimum fallback for single-token operations
-    }
-
-    // PagedAttention Block Integration
-    // We bind directly to the native GraphWrapper/TRT engine pipelines here
-#if !defined(MOCK_HIP)
-    // Synchronous execution path native to HIP when bypassing pybind objects
-    CHECK_HIP(hipMemcpy(output_ptr, input_ptr, byte_size, hipMemcpyDeviceToHost));
-#else
-    // Pure mock environment execution struct
-    if (output_ptr != nullptr && input_ptr != nullptr) {
-        std::memcpy(output_ptr, input_ptr, std::min(byte_size, static_cast<size_t>(sizeof(int32_t))));
-    }
-#endif
+    launch(input_ptr, output_ptr, seq_len, 0, byte_size);
 }
 
 void AOTEngine::synchronize_and_clear(uintptr_t stream_ptr) {

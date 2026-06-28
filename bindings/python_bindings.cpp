@@ -32,6 +32,42 @@ PYBIND11_MODULE(_core, m) {
 
     py::register_exception<HardwareMismatchError>(m, "HardwareMismatchError");
 
+    py::class_<KernelLaunchDescriptor>(m, "KernelLaunchDescriptor")
+        .def(py::init<>())
+        .def_readwrite("input_ptr", &KernelLaunchDescriptor::input_ptr)
+        .def_readwrite("output_ptr", &KernelLaunchDescriptor::output_ptr)
+        .def_readwrite("qkv_weight_ptr", &KernelLaunchDescriptor::qkv_weight_ptr)
+        .def_readwrite("qkv_bias_ptr", &KernelLaunchDescriptor::qkv_bias_ptr)
+        .def_readwrite("rms_weight_ptr", &KernelLaunchDescriptor::rms_weight_ptr)
+        .def_readwrite("freqs_cos_ptr", &KernelLaunchDescriptor::freqs_cos_ptr)
+        .def_readwrite("freqs_sin_ptr", &KernelLaunchDescriptor::freqs_sin_ptr)
+        .def_readwrite("k_output_ptr", &KernelLaunchDescriptor::k_output_ptr)
+        .def_readwrite("v_output_ptr", &KernelLaunchDescriptor::v_output_ptr)
+        .def_readwrite("seq_len", &KernelLaunchDescriptor::seq_len)
+        .def_readwrite("d_model", &KernelLaunchDescriptor::d_model)
+        .def_readwrite("n_heads", &KernelLaunchDescriptor::n_heads)
+        .def_readwrite("head_dim", &KernelLaunchDescriptor::head_dim)
+        .def_readwrite("eps", &KernelLaunchDescriptor::eps)
+        .def_readwrite("stride_x_seq", &KernelLaunchDescriptor::stride_x_seq)
+        .def_readwrite("stride_x_dim", &KernelLaunchDescriptor::stride_x_dim)
+        .def_readwrite("stride_w_out", &KernelLaunchDescriptor::stride_w_out)
+        .def_readwrite("stride_w_in", &KernelLaunchDescriptor::stride_w_in)
+        .def_readwrite("stride_q_seq", &KernelLaunchDescriptor::stride_q_seq)
+        .def_readwrite("stride_q_dim", &KernelLaunchDescriptor::stride_q_dim)
+        .def_readwrite("stride_k_seq", &KernelLaunchDescriptor::stride_k_seq)
+        .def_readwrite("stride_k_dim", &KernelLaunchDescriptor::stride_k_dim)
+        .def_readwrite("stride_v_seq", &KernelLaunchDescriptor::stride_v_seq)
+        .def_readwrite("stride_v_dim", &KernelLaunchDescriptor::stride_v_dim)
+        .def_readwrite("byte_size", &KernelLaunchDescriptor::byte_size)
+        .def_readwrite("kernel_name", &KernelLaunchDescriptor::kernel_name)
+        .def_readwrite("grid_x", &KernelLaunchDescriptor::grid_x)
+        .def_readwrite("grid_y", &KernelLaunchDescriptor::grid_y)
+        .def_readwrite("grid_z", &KernelLaunchDescriptor::grid_z)
+        .def_readwrite("block_x", &KernelLaunchDescriptor::block_x)
+        .def_readwrite("block_y", &KernelLaunchDescriptor::block_y)
+        .def_readwrite("block_z", &KernelLaunchDescriptor::block_z)
+        .def_readwrite("shared_mem_bytes", &KernelLaunchDescriptor::shared_mem_bytes);
+
     py::class_<AOTEngine>(m, "AOTEngine")
         .def(py::init<>())
         .def("compile_ahead_of_time", [](AOTEngine& self, const std::string& output_filepath, py::object stream_obj, const std::string& kinetic_target) {
@@ -40,10 +76,14 @@ PYBIND11_MODULE(_core, m) {
              py::arg("output_filepath"), py::arg("stream_obj"), py::arg("kinetic_target"))
         .def("load_model", &AOTEngine::load_model, "Load a compiled .kin model",
              py::arg("filepath"))
-        .def("launch", [](AOTEngine& self, py::object py_input, py::object stream_obj, size_t byte_size) {
-            self.launch(py_input, py::cast<uintptr_t>(stream_obj), byte_size);
-        }, "Launch AOT kernel asynchronously with pinned buffers",
-             py::arg("py_input"), py::arg("stream_obj"), py::arg("byte_size") = 0)
+        .def("launch", [](AOTEngine& self, uintptr_t input_ptr, uintptr_t output_ptr, int seq_len, py::object stream_obj, size_t byte_size) {
+            self.launch(reinterpret_cast<void*>(input_ptr), reinterpret_cast<void*>(output_ptr), seq_len, py::cast<uintptr_t>(stream_obj), byte_size);
+        }, "Launch AOT kernel asynchronously with explicit input/output buffers",
+             py::arg("input_ptr"), py::arg("output_ptr"), py::arg("seq_len"), py::arg("stream_obj") = py::int_(0), py::arg("byte_size") = 0)
+        .def("launch_descriptor", [](AOTEngine& self, KernelLaunchDescriptor& descriptor, py::object stream_obj) {
+            self.launch(descriptor, py::cast<uintptr_t>(stream_obj));
+        }, "Launch AOT kernel asynchronously with a structured descriptor",
+             py::arg("descriptor"), py::arg("stream_obj"))
         .def("synchronize_and_clear", [](AOTEngine& self, py::object stream_obj) {
             self.synchronize_and_clear(py::cast<uintptr_t>(stream_obj));
         }, "Synchronize stream and clear pinned buffers",
