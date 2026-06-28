@@ -41,14 +41,13 @@ public:
             // Mapping buffer pointer natively into TRT execution
             trt_engine_.launch(input_ptr, output_ptr, seq_len);
         } else {
-            // AOT Engine launch natively accepts pybind objects for lifecycle pinning.
-            // When falling back to pointer mapping via Router, we construct an explicit execution path.
+            // AOT Engine launch natively accepts explicit device input/output buffers.
             aot_engine_.launch_ptr(input_ptr, output_ptr, seq_len, byte_size);
         }
     }
 
-    void launch_py(pybind11::object py_input, uintptr_t stream_ptr) {
-        aot_engine_.launch(py_input, stream_ptr);
+    void launch_py(void* input_ptr, void* output_ptr, int seq_len, uintptr_t stream_ptr, size_t byte_size = 0) {
+        aot_engine_.launch(input_ptr, output_ptr, seq_len, stream_ptr, byte_size);
     }
 
 private:

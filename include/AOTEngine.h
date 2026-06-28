@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <iostream>
 #include <mutex>
+#include <unordered_map>
 
 #if defined(MOCK_HIP)
 #include "../tests/mock_hip.h"
@@ -41,6 +42,21 @@ struct KinHeader {
 struct KernelVariant {
     std::string name;
     // other config properties...
+};
+
+struct KernelLaunchDescriptor {
+    void* input_ptr = nullptr;
+    void* output_ptr = nullptr;
+    int seq_len = 0;
+    size_t byte_size = 0;
+    std::string kernel_name;
+    unsigned int grid_x = 0;
+    unsigned int grid_y = 1;
+    unsigned int grid_z = 1;
+    unsigned int block_x = 256;
+    unsigned int block_y = 1;
+    unsigned int block_z = 1;
+    unsigned int shared_mem_bytes = 0;
 };
 
 class SmartAutotuner {
@@ -83,7 +99,8 @@ public:
     // Load from .kin and initialize the engine
     void load_model(const std::string& filepath);
 
-    void launch(pybind11::object py_input, uintptr_t stream_ptr, size_t byte_size = 0);
+    void launch(const KernelLaunchDescriptor& descriptor, uintptr_t stream_ptr);
+    void launch(void* input_ptr, void* output_ptr, int seq_len, uintptr_t stream_ptr, size_t byte_size = 0);
     void launch_ptr(void* input_ptr, void* output_ptr, int seq_len, size_t byte_size = 0);
     void synchronize_and_clear(uintptr_t stream_ptr);
 
@@ -101,6 +118,8 @@ private:
     SmartAutotuner autotuner_;
     Serializer serializer_;
     hipModule_t module_;
+    std::unordered_map<std::string, hipFunction_t> kernel_functions_;
+    std::string default_kernel_name_;
     std::recursive_mutex engine_mutex_;
     std::vector<pybind11::object> pinned_buffers_;
     void* device_buffer_ = nullptr;
