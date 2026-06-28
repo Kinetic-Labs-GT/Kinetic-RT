@@ -47,7 +47,28 @@ struct KernelVariant {
 struct KernelLaunchDescriptor {
     void* input_ptr = nullptr;
     void* output_ptr = nullptr;
+    void* qkv_weight_ptr = nullptr;
+    void* qkv_bias_ptr = nullptr;
+    void* rms_weight_ptr = nullptr;
+    void* freqs_cos_ptr = nullptr;
+    void* freqs_sin_ptr = nullptr;
+    void* k_output_ptr = nullptr;
+    void* v_output_ptr = nullptr;
     int seq_len = 0;
+    int d_model = 0;
+    int n_heads = 0;
+    int head_dim = 0;
+    float eps = 1.0e-5f;
+    int stride_x_seq = 0;
+    int stride_x_dim = 0;
+    int stride_w_out = 0;
+    int stride_w_in = 0;
+    int stride_q_seq = 0;
+    int stride_q_dim = 0;
+    int stride_k_seq = 0;
+    int stride_k_dim = 0;
+    int stride_v_seq = 0;
+    int stride_v_dim = 0;
     size_t byte_size = 0;
     std::string kernel_name;
     unsigned int grid_x = 0;

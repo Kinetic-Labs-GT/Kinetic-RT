@@ -136,7 +136,7 @@ class KineticRuntime:
                     self.wrapper.invalidate()
                 else:
                     # Routed execution path handling HardwareRouter
-                    self.engine.launch(input_ptr, output_ptr, seq_len, stream_ptr)
+                    self.engine.launch(input_ptr, output_ptr, seq_len)
                     if HAS_TORCH and torch.cuda.is_available():
                         torch.cuda.synchronize()
 

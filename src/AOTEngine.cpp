@@ -353,7 +353,7 @@ void AOTEngine::load_kernel(const std::vector<uint8_t>& binary_data, const std::
     }
 
     if (candidate_symbols.empty()) {
-        candidate_symbols = {"kernel", "triton_kernel", "fused_kernel", "matmul_kernel", "main"};
+        candidate_symbols = {"fused_rmsnorm_qkv_rope", "kernel", "triton_kernel", "fused_kernel", "matmul_kernel", "main"};
     }
 
     for (const auto& symbol : candidate_symbols) {
@@ -411,6 +411,52 @@ void AOTEngine::launch(const KernelLaunchDescriptor& descriptor, uintptr_t strea
     void* output_ptr = descriptor.output_ptr;
     int seq_len = descriptor.seq_len;
     size_t byte_size = descriptor.byte_size;
+
+    if (kernel_name == "fused_rmsnorm_qkv_rope") {
+        if (descriptor.qkv_weight_ptr == nullptr || descriptor.qkv_bias_ptr == nullptr ||
+            descriptor.rms_weight_ptr == nullptr || descriptor.freqs_cos_ptr == nullptr ||
+            descriptor.freqs_sin_ptr == nullptr || descriptor.k_output_ptr == nullptr ||
+            descriptor.v_output_ptr == nullptr) {
+            throw std::runtime_error("Cannot launch fused_rmsnorm_qkv_rope: descriptor is missing required weight, frequency, or K/V output buffers.");
+        }
+
+        if (descriptor.seq_len <= 0 || descriptor.d_model <= 0 || descriptor.n_heads <= 0 || descriptor.head_dim <= 0) {
+            throw std::runtime_error("Cannot launch fused_rmsnorm_qkv_rope: seq_len, d_model, n_heads, and head_dim must be positive.");
+        }
+
+        void* qkv_weight_ptr = descriptor.qkv_weight_ptr;
+        void* qkv_bias_ptr = descriptor.qkv_bias_ptr;
+        void* rms_weight_ptr = descriptor.rms_weight_ptr;
+        void* freqs_cos_ptr = descriptor.freqs_cos_ptr;
+        void* freqs_sin_ptr = descriptor.freqs_sin_ptr;
+        void* k_output_ptr = descriptor.k_output_ptr;
+        void* v_output_ptr = descriptor.v_output_ptr;
+        int d_model = descriptor.d_model;
+        int n_heads = descriptor.n_heads;
+        int head_dim = descriptor.head_dim;
+        float eps = descriptor.eps;
+        int stride_x_seq = descriptor.stride_x_seq;
+        int stride_x_dim = descriptor.stride_x_dim;
+        int stride_w_out = descriptor.stride_w_out;
+        int stride_w_in = descriptor.stride_w_in;
+        int stride_q_seq = descriptor.stride_q_seq;
+        int stride_q_dim = descriptor.stride_q_dim;
+        int stride_k_seq = descriptor.stride_k_seq;
+        int stride_k_dim = descriptor.stride_k_dim;
+        int stride_v_seq = descriptor.stride_v_seq;
+        int stride_v_dim = descriptor.stride_v_dim;
+        void* fused_kernel_params[] = {&input_ptr, &qkv_weight_ptr, &qkv_bias_ptr, &rms_weight_ptr,
+                                      &freqs_cos_ptr, &freqs_sin_ptr, &output_ptr, &k_output_ptr,
+                                      &v_output_ptr, &seq_len, &d_model, &n_heads, &head_dim, &eps,
+                                      &stride_x_seq, &stride_x_dim, &stride_w_out, &stride_w_in,
+                                      &stride_q_seq, &stride_q_dim, &stride_k_seq, &stride_k_dim,
+                                      &stride_v_seq, &stride_v_dim};
+        CHECK_HIP(hipModuleLaunchKernel(function_it->second, grid_x, grid_y, grid_z,
+                                        block_x, block_y, block_z, descriptor.shared_mem_bytes,
+                                        stream, fused_kernel_params, nullptr));
+        return;
+    }
+
     void* kernel_params[] = {&input_ptr, &output_ptr, &seq_len, &byte_size};
 
     CHECK_HIP(hipModuleLaunchKernel(function_it->second, grid_x, grid_y, grid_z,
