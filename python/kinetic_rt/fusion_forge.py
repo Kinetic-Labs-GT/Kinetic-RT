@@ -1,6 +1,17 @@
 import triton
 import triton.language as tl
 import torch
+import json  # Added for JSON encoding
+import os
+import hashlib
+import struct
+import logging
+from .hardware_probe import probe_hardware
+
+logger = logging.getLogger(__name__)
+
+# Global artifact kind – set during compilation to indicate mock or production
+_artifact_kind = "production"
 
 @triton.jit
 def fused_rmsnorm_qkv_rope(
@@ -175,17 +186,8 @@ def validate_compilation(compiled_binary, backend):
     elif backend == "ROCm" and compiled_binary[18:20] != b"\xE0\x00":
         raise TritonCompilationError("Triton binary architecture is not AMDGPU.")
 
-import os
-import hashlib
-import struct
-import logging
-from .hardware_probe import probe_hardware
-
-logger = logging.getLogger(__name__)
-
-
 # ---------------------------------------------------------------------------
-# FIX 3: KernelRegistry — central catalog of Triton kernels for AOT pipeline
+# KernelRegistry — central catalog of Triton kernels for AOT pipeline
 # ---------------------------------------------------------------------------
 class KernelRegistry:
     """Registry for Triton kernel metadata used during AOT compilation."""
@@ -253,9 +255,10 @@ KernelRegistry.register(
 
 # ---------------------------------------------------------------------------
 # Helper: build a structurally valid mock ELF for CI / headless environments
+# Renamed to _build_test_only_mock_elf to reflect its non-production purpose.
 # ---------------------------------------------------------------------------
-def _build_mock_elf(backend):
-    """Return a minimal but structurally valid 64-bit ELF bytearray."""
+def _build_test_only_mock_elf(backend):
+    """Return a minimal but structurally valid 64-bit ELF bytearray (test-only)."""
     elf = bytearray(64)
     elf[0:4] = b"\x7fELF"
     elf[4] = 2          # ELFCLASS64
@@ -307,6 +310,8 @@ def _compile_kernel_binary(kinetic_target, backend, kernel_fn=None):
     ``fused_rmsnorm_qkv_rope``).  Falls back to a mock ELF under
     MOCK_HIP=1 / TRITON_INTERPRET=1 / headless CI.
     """
+    global _artifact_kind
+
     if kernel_fn is None:
         entry = KernelRegistry.get("fused_rmsnorm_qkv_rope")
         if entry is not None:
@@ -320,7 +325,8 @@ def _compile_kernel_binary(kinetic_target, backend, kernel_fn=None):
         # device binaries.  Detect this early.
         if os.environ.get("TRITON_INTERPRET") == "1":
             logger.info("TRITON_INTERPRET=1 active — Triton compiler will not produce device binaries; using mock ELF")
-            return _build_mock_elf(backend)
+            _artifact_kind = "mock"
+            return _build_test_only_mock_elf(backend)
 
         if kernel_fn is None:
             raise RuntimeError("No kernel function available for compilation")
@@ -345,46 +351,55 @@ def _compile_kernel_binary(kinetic_target, backend, kernel_fn=None):
             raise RuntimeError("Triton compilation did not yield a recognisable binary artifact (cubin/hsaco/ptx)")
 
         logger.info(f"Triton compilation succeeded for target={kinetic_target}, binary size={len(binary)} bytes")
+        _artifact_kind = "production"
         return binary
 
     except Exception as exc:
         if os.environ.get("MOCK_HIP") == "1" or "0 active drivers" in str(exc):
             logger.warning(f"Triton compilation unavailable ({exc}); producing mock ELF")
-            return _build_mock_elf(backend)
+            _artifact_kind = "mock"
+            return _build_test_only_mock_elf(backend)
         raise RuntimeError(f"Triton kernel compilation failed: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
-# Helper: build an op-graph descriptor
+# Helper: build an op-graph descriptor as JSON bytes
 # ---------------------------------------------------------------------------
 def _build_op_graph_data(model):
     """
     If *model* is provided, trace with ``torch.fx`` and serialise node
-    op-names into a list of ints (one byte per character, length-prefixed).
-    Otherwise return a minimal valid descriptor.
+    op-names into a JSON object. Always includes the artifact_kind field.
+    Returns a list of ints (bytes) representing the UTF-8 encoded JSON.
     """
+    global _artifact_kind
+
     if model is None:
-        return [10, 20, 30]  # Minimal valid placeholder
+        # Minimal valid placeholder with artifact_kind
+        data = {"artifact_kind": _artifact_kind, "graph": ["placeholder"]}
+        json_str = json.dumps(data)
+        return list(json_str.encode('utf-8'))
 
     try:
         import torch as _torch
         graph = _torch.fx.symbolic_trace(model)
         node_names = [n.name for n in graph.graph.nodes]
-        # Encode: for each name, store length byte then UTF-8 bytes.
-        data = []
-        for name in node_names:
-            encoded = name.encode("utf-8")
-            data.append(len(encoded))
-            data.extend(encoded)
-        logger.info(f"Built op_graph_data with {len(node_names)} nodes from torch.fx trace")
-        return data
+        data = {
+            "artifact_kind": _artifact_kind,
+            "graph": node_names,
+            "version": 1,
+        }
+        json_str = json.dumps(data)
+        logger.info(f"Built op_graph_data with {len(node_names)} nodes from torch.fx trace, artifact_kind={_artifact_kind}")
+        return list(json_str.encode('utf-8'))
     except Exception as exc:
         logger.warning(f"torch.fx tracing failed ({exc}); returning minimal op_graph_data")
-        return [10, 20, 30]
+        data = {"artifact_kind": _artifact_kind, "graph": ["fallback"]}
+        json_str = json.dumps(data)
+        return list(json_str.encode('utf-8'))
 
 
 # ---------------------------------------------------------------------------
-# FIX 2: native_triton_compile — compile real kernel, not no_op_kernel
+# native_triton_compile — compile real kernel, not no_op_kernel
 # ---------------------------------------------------------------------------
 def native_triton_compile(kinetic_target, kernel_fn=None):
     """
@@ -392,6 +407,8 @@ def native_triton_compile(kinetic_target, kernel_fn=None):
     Triton bytes.  Compiles ``fused_rmsnorm_qkv_rope`` (or the supplied
     *kernel_fn*) and returns the device binary.
     """
+    global _artifact_kind
+
     if kernel_fn is None:
         entry = KernelRegistry.get("fused_rmsnorm_qkv_rope")
         if entry is not None:
@@ -405,7 +422,8 @@ def native_triton_compile(kinetic_target, kernel_fn=None):
         # Interpret mode cannot produce device binaries.
         if os.environ.get("TRITON_INTERPRET") == "1":
             logger.info("TRITON_INTERPRET=1 — falling back to mock ELF for native_triton_compile")
-            return _build_mock_elf(backend)
+            _artifact_kind = "mock"
+            return _build_test_only_mock_elf(backend)
 
         if kernel_fn is None:
             raise RuntimeError("No kernel function provided and fused_rmsnorm_qkv_rope not in registry")
@@ -420,10 +438,13 @@ def native_triton_compile(kinetic_target, kernel_fn=None):
 
         asm = compiled.asm
         if 'cubin' in asm:
+            _artifact_kind = "production"
             return asm['cubin']
         elif 'hsaco' in asm:
+            _artifact_kind = "production"
             return asm['hsaco']
         elif 'ptx' in asm:
+            _artifact_kind = "production"
             return asm['ptx'].encode('utf-8') if isinstance(asm['ptx'], str) else asm['ptx']
         else:
             raise RuntimeError("Triton compilation did not yield a valid binary artifact")
@@ -431,12 +452,13 @@ def native_triton_compile(kinetic_target, kernel_fn=None):
     except Exception as exc:
         if os.environ.get("MOCK_HIP") == "1" or "0 active drivers" in str(exc):
             logger.warning(f"Native Triton compilation unavailable ({exc}); producing mock ELF")
-            return _build_mock_elf(backend)
+            _artifact_kind = "mock"
+            return _build_test_only_mock_elf(backend)
         raise RuntimeError(f"Native Triton compilation failed: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
-# FIX 1: compile_and_serialize — real pipeline, no fake bytearrays
+# compile_and_serialize — real pipeline, no fake bytearrays
 # ---------------------------------------------------------------------------
 def compile_and_serialize(engine, serializer, output_filepath, device_id=None, model=None, **kwargs):
     """
@@ -458,7 +480,7 @@ def compile_and_serialize(engine, serializer, output_filepath, device_id=None, m
     # Step 2 — compile kernel binary (real Triton or mock ELF)
     compiled_binary = _compile_kernel_binary(kinetic_target, backend)
 
-    # Step 3 — build op-graph descriptor
+    # Step 3 — build op-graph descriptor (now includes artifact_kind)
     op_graph_data = _build_op_graph_data(model)
 
     # Step 4 — serialise to .kin
@@ -481,6 +503,7 @@ def get_op_graph_data(kinetic_target):
     Called from C++ ``AOTEngine::compile_ahead_of_time()`` via pybind11 to
     retrieve an op-graph metadata descriptor for the given *kinetic_target*.
     Returns a ``bytes`` object containing a JSON-encoded descriptor.
+    Includes the artifact_kind field.
     """
     import json
     registry = KernelRegistry.get_all()
@@ -488,7 +511,8 @@ def get_op_graph_data(kinetic_target):
         'target': kinetic_target,
         'kernels': list(registry.keys()),
         'version': 1,
+        'artifact_kind': _artifact_kind,   # Injected based on compilation outcome
     }
     encoded = json.dumps(graph_descriptor).encode('utf-8')
-    logger.debug(f"get_op_graph_data({kinetic_target}): {len(encoded)} bytes")
+    logger.debug(f"get_op_graph_data({kinetic_target}): {len(encoded)} bytes, artifact_kind={_artifact_kind}")
     return encoded
