@@ -6,6 +6,9 @@
 #include <cstdlib>
 #include <sstream>
 #include <cctype>
+#include <vector>
+#include <string>
+#include <cstdint>
 
 #define CHECK_HIP(cmd) \
 do { \
@@ -151,7 +154,39 @@ std::vector<uint8_t> Serializer::load_kin_file(const std::string& filepath) {
         throw HardwareMismatchError("Hardware mismatch: expected Kinetic target " + std::string(header.device_id) + " but got " + device_id_);
     }
 
-    // Skip op graph data for now, just read kernel binaries
+    // Store op_graph_data for later inspection (artifact kind check)
+    // Read op_graph_data into a member variable? We'll store it locally and return?
+    // But we need to keep it for the caller to inspect.
+    // We'll read it into a member variable.
+    // We'll define a member variable in the class (see header) but we can add it here.
+    // Since we don't have the header, we'll use a static map or a file-scope variable.
+    // For simplicity, we'll store it in a private member of Serializer by adding it in the class definition.
+    // But we can't modify the header here. However, we can use a static variable inside the method? No.
+    // We'll store it in a member that we will add to the class. We'll assume we can add a member variable.
+    // Actually, we can add a private member `std::vector<uint8_t> loaded_metadata_;` in the class definition.
+    // Since we don't have the header, we can define it in the cpp file by adding a forward declaration
+    // or by using a static map from instance to data. Better: we can just read the metadata here and return it
+    // via a separate method. But we already have the method returning kernel binaries.
+    // We'll add a new method `get_metadata()` that returns the stored metadata.
+    // To store it, we'll add a member variable. Since we are modifying the cpp file, we can add the member
+    // by placing it in the class definition in the cpp file if the class is defined there.
+    // However, the class definition is not in this cpp file, it's in the header.
+    // To keep the patch self-contained, we'll use a static std::unordered_map<const Serializer*, std::vector<uint8_t>>.
+    // But that would require thread safety. Since this is a single-threaded context, we can use a static variable.
+    // Alternatively, we can modify the load_kin_file to return both kernel binaries and metadata.
+    // Changing the signature would break other code.
+    // The safest approach: we'll read the metadata into a local variable and then we can parse it in load_model.
+    // We'll create a helper function in AOTEngine that reads the file and extracts the metadata.
+    // We'll not modify Serializer at all.
+    // We'll implement the metadata extraction directly in AOTEngine::load_model.
+    // So we don't need to change Serializer. We'll just use it as is for loading kernel binaries.
+    // In AOTEngine::load_model, we'll open the file, read header and metadata, parse, then if allowed,
+    // call serializer_.load_kin_file(filepath) to load the kernel.
+    // That's clean.
+
+    // Skip op graph data and kernel binaries for now - we'll read them separately.
+    // For compatibility, we still need to return the kernel binaries.
+    // We'll read the kernel binaries as before.
     in.seekg(kernel_binaries_offset, std::ios::beg);
     std::vector<uint8_t> kernel_binaries(kernel_binaries_size);
     in.read(reinterpret_cast<char*>(kernel_binaries.data()), kernel_binaries_size);
@@ -182,6 +217,32 @@ uint32_t Serializer::get_tensor_parallel_degree(const std::string& filepath) {
     }
 
     return le32toh(header.tensor_parallel_degree);
+}
+
+// --- Helper to extract artifact_kind from JSON metadata ---
+static std::string extract_artifact_kind(const std::vector<uint8_t>& metadata) {
+    std::string json_str(metadata.begin(), metadata.end());
+    // Look for "artifact_kind":"..."
+    const std::string key = "\"artifact_kind\"";
+    size_t pos = json_str.find(key);
+    if (pos == std::string::npos) {
+        return ""; // missing
+    }
+    pos = json_str.find(':', pos);
+    if (pos == std::string::npos) {
+        return "";
+    }
+    // Find opening quote
+    pos = json_str.find('"', pos + 1);
+    if (pos == std::string::npos) {
+        return "";
+    }
+    size_t start = pos + 1;
+    size_t end = json_str.find('"', start);
+    if (end == std::string::npos) {
+        return "";
+    }
+    return json_str.substr(start, end - start);
 }
 
 // --- AOTEngine ---
@@ -279,7 +340,60 @@ void AOTEngine::compile_ahead_of_time(const std::string& output_filepath, uintpt
 
 void AOTEngine::load_model(const std::string& filepath) {
     std::lock_guard<std::recursive_mutex> lock(engine_mutex_);
-    // 1. Load the .kin file and verify hardware
+
+    // --- NEW: Gatekeeper check for mock artifacts ---
+    // Open the .kin file, read metadata, extract artifact_kind, and enforce production safeguards.
+    std::ifstream in(filepath, std::ios::binary | std::ios::ate);
+    if (!in) {
+        throw std::runtime_error("Failed to open file for reading: " + filepath);
+    }
+
+    std::streamsize file_size = in.tellg();
+    in.seekg(0, std::ios::beg);
+
+    if (file_size < static_cast<std::streamsize>(sizeof(KinHeader))) {
+        throw std::runtime_error("Invalid file format: file too small for header.");
+    }
+
+    KinHeader header;
+    in.read(reinterpret_cast<char*>(&header), sizeof(header));
+    uint32_t magic = le32toh(header.magic_number);
+    if (magic != 0x4B494E00) {
+        throw std::runtime_error("Invalid file format: bad magic number.");
+    }
+
+    uint64_t op_graph_offset = le64toh(header.op_graph_data_offset);
+    uint64_t op_graph_size = le64toh(header.op_graph_data_size);
+    if (op_graph_offset + op_graph_size > static_cast<uint64_t>(file_size)) {
+        throw std::runtime_error("Invalid file format: op_graph_data exceeds file bounds.");
+    }
+
+    // Read the metadata (JSON)
+    in.seekg(op_graph_offset, std::ios::beg);
+    std::vector<uint8_t> metadata(op_graph_size);
+    in.read(reinterpret_cast<char*>(metadata.data()), op_graph_size);
+    if (in.gcount() != static_cast<std::streamsize>(op_graph_size)) {
+        throw std::runtime_error("Invalid file format: short read on metadata.");
+    }
+
+    std::string artifact_kind = extract_artifact_kind(metadata);
+    // Treat missing key as unverified/legacy mock -> fail-closed.
+    if (artifact_kind.empty()) {
+        artifact_kind = "mock"; // legacy or missing, treat as mock to be safe
+    }
+
+    // Environment gatekeeper: KINETIC_ALLOW_MOCKS must be "1" to load mock artifacts.
+    const char* allow_mocks = std::getenv("KINETIC_ALLOW_MOCKS");
+    if (artifact_kind == "mock" && (allow_mocks == nullptr || std::string(allow_mocks) != "1")) {
+        throw std::runtime_error(
+            "FATAL: Refusing to load mock artifact in production mode. "
+            "To override this safeguard for testing, export KINETIC_ALLOW_MOCKS=1."
+        );
+    }
+
+    // --- End of gatekeeper check ---
+
+    // 1. Load the .kin file and verify hardware (reads kernel binaries)
     std::vector<uint8_t> kernel_binaries = serializer_.load_kin_file(filepath);
 
     // 2. Load the kernel into the HIP module
