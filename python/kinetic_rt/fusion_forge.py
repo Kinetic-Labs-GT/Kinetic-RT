@@ -228,12 +228,12 @@ def _validate_ir(ir):
                 raise IRValidationError(f"Un-fusable or unsupported operation breaking compilation boundaries: {node.op}", {"node": node.name, "op": node.op})
 
             # Check for dangling/unbounded node references
-            for arg in node.args:
+            def check_dangling(arg):
                 if isinstance(arg, torch.fx.Node) and arg not in nodes:
                     raise IRValidationError(f"Dangling reference detected: node '{node.name}' references missing node '{arg.name}'.", {"node": node.name, "dangling_ref": arg.name})
-            for kwarg in node.kwargs.values():
-                if isinstance(kwarg, torch.fx.Node) and kwarg not in nodes:
-                    raise IRValidationError(f"Dangling reference detected: node '{node.name}' references missing node '{kwarg.name}'.", {"node": node.name, "dangling_ref": kwarg.name})
+
+            torch.fx.node.map_arg(node.args, check_dangling)
+            torch.fx.node.map_arg(node.kwargs, check_dangling)
     else:
         raise IRValidationError(f"Unsupported IR type for validation: {type(ir)}", {"type": str(type(ir))})
 
