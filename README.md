@@ -30,17 +30,23 @@ By fusing Triton-compiled kernels within a pure, highly optimized C++ engine (`s
 To run the end-to-end extraction, AOT compilation, and inference pipeline:
 
 1. **Export and Serialize the Model:**
-   ```bash
+```bash
    # Shards weights logically, compiles Triton fusion ops, and serializes the state to a .kin artifact.
-   python scripts/export_hf.py --tp 1 --output_dir ./models
-   ```
+   python scripts/export_hf.py --tp 1 --model_id HuggingFaceTB/SmolLM2-135M --output_dir ./models
+```
    *Tip: You can use `export KINETIC_TARGET=sm75` to force targeted cross-compilation.*
 
+   **Network behavior & offline / air-gapped execution:** By default, `--model_id` is set to `HuggingFaceTB/SmolLM2-135M` and is resolved via `AutoModelForCausalLM.from_pretrained`, which will reach out to the Hugging Face Hub to download weights. On offline, firewalled, or air-gapped compute nodes this network call will fail. To run entirely offline, pass `--model_id` as a fully-qualified local directory path containing the pre-downloaded model files (config, tokenizer, and weight shards) instead of a Hub repo ID:
+```bash
+   # Offline / air-gapped: loads weights from a local directory, no network access required.
+   python scripts/export_hf.py --tp 1 --model_id /path/to/local/weights --output_dir ./models
+```
+
 2. **Run Inference:**
-   ```bash
+```bash
    # Bootstraps the runtime, mounts the serialized model, and executes the graph inference.
    PYTHONPATH=. python scripts/run_first_light.py --model_dir ./models
-   ```
+```
 
 ## Performance Benchmarks
 *Note: The following benchmarks are based on reference configurations (Llama-3 architecture, batch size 1, sequence length 128).*
