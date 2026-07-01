@@ -18,11 +18,23 @@ logger = logging.getLogger(__name__)
 def export_model():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tp", type=int, default=2, help="Tensor parallelism degree")
+    parser.add_argument(
+        "--model_id",
+        type=str,
+        default="HuggingFaceTB/SmolLM2-135M",
+        help=(
+            "Model to export. Accepts either a Hugging Face Hub repository ID "
+            "(e.g. 'HuggingFaceTB/SmolLM2-135M') for online quickstart runs, or a "
+            "fully-qualified local directory path containing pre-downloaded model "
+            "weights (config.json, tokenizer files, and weight shards) for offline "
+            "or air-gapped execution."
+        ),
+    )
     parser.add_argument("--output_dir", required=True, type=str, help="Output directory for the serialized model")
     args = parser.parse_args()
 
-    model_id = "HuggingFaceTB/SmolLM2-135M"
-    logger.info(f"Downloading {model_id}...")
+    model_id = args.model_id
+    logger.info(f"Loading {model_id}...")
 
     # We will just load the state_dict
     model = AutoModelForCausalLM.from_pretrained(model_id)
