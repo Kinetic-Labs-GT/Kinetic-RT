@@ -1,7 +1,7 @@
 import triton
 import triton.language as tl
 import torch
-import json  # Added for JSON encoding
+import json
 import os
 import hashlib
 import struct
@@ -12,6 +12,11 @@ logger = logging.getLogger(__name__)
 
 # Global artifact kind – set during compilation to indicate mock or production
 _artifact_kind = "production"
+
+# Supported torch.fx operations for fusion boundaries
+SUPPORTED_FX_OPS = {
+    "placeholder", "call_function", "call_method", "call_module", "get_attr", "output"
+}
 
 @triton.jit
 def fused_rmsnorm_qkv_rope(
@@ -156,17 +161,84 @@ def fused_rmsnorm_qkv_rope(
     v_out_ptrs = v_out_ptr + pid * stride_v_seq + offsets_d * stride_v_dim
     tl.store(v_out_ptrs, v, mask=offsets_d < d_model)
 
+
 class TritonCompilationError(Exception):
-    pass
+    """Robust custom exception for Triton compilation failures."""
+    def __init__(self, message, context=None):
+        self.message = message
+        self.context = context or {}
+        full_msg = f"TritonCompilationError: {message}"
+        if self.context:
+            full_msg += f" | Context: {json.dumps(self.context, default=str)}"
+        logger.error(full_msg)
+        super().__init__(full_msg)
+
 
 class IRValidationError(Exception):
-    pass
+    """Robust custom exception for IR structural validation breaches."""
+    def __init__(self, message, context=None):
+        self.message = message
+        self.context = context or {}
+        full_msg = f"IRValidationError: {message}"
+        if self.context:
+            full_msg += f" | Context: {json.dumps(self.context, default=str)}"
+        logger.error(full_msg)
+        super().__init__(full_msg)
+
 
 def _validate_ir(ir):
-    # Dummy IR validation function
-    if not ir:
-        raise IRValidationError("IR is empty.")
+    """
+    Perform deep structural validation of the intermediate representation.
+    Accepts torch.fx.Graph, torch.fx.GraphModule, or graph descriptor dictionary.
+    """
+    if isinstance(ir, dict):
+        # --- Schema Verification ---
+        if "artifact_kind" not in ir or not isinstance(ir["artifact_kind"], str):
+            raise IRValidationError("Missing or invalid 'artifact_kind' in IR dictionary.", {"ir_keys": list(ir.keys())})
+        if "graph" not in ir or not isinstance(ir["graph"], list):
+            raise IRValidationError("Missing or invalid 'graph' list in IR dictionary.", {"ir_keys": list(ir.keys())})
+        if "version" not in ir or not isinstance(ir["version"], int):
+            raise IRValidationError("Missing or invalid 'version' integer in IR dictionary.", {"ir_keys": list(ir.keys())})
+
+        # --- Target Compatibility ---
+        if ir["version"] != 1:
+            raise IRValidationError(f"Unsupported IR version: {ir['version']}. Expected 1.", {"version": ir["version"]})
+
+        # --- Operation Legality & Sanitization ---
+        if not ir["graph"]:
+            raise IRValidationError("Graph structure is empty.", {})
+
+        for node in ir["graph"]:
+            if not isinstance(node, str) or not node.strip():
+                raise IRValidationError(f"Malformed or empty node entry in graph: {node}", {"node": node})
+
+    elif isinstance(ir, (torch.fx.Graph, torch.fx.GraphModule)):
+        graph = ir if isinstance(ir, torch.fx.Graph) else ir.graph
+        nodes = list(graph.nodes)
+
+        if not nodes:
+            raise IRValidationError("torch.fx.Graph contains no nodes.", {})
+
+        for node in nodes:
+            if not isinstance(node, torch.fx.Node):
+                raise IRValidationError(f"Invalid node type in graph: {type(node)}", {"node": str(node)})
+            if not node.name or not isinstance(node.name, str):
+                raise IRValidationError(f"Node is missing a valid name.", {"node": str(node)})
+            if node.op not in SUPPORTED_FX_OPS:
+                raise IRValidationError(f"Un-fusable or unsupported operation breaking compilation boundaries: {node.op}", {"node": node.name, "op": node.op})
+
+            # Check for dangling/unbounded node references
+            def check_dangling(arg):
+                if isinstance(arg, torch.fx.Node) and arg not in nodes:
+                    raise IRValidationError(f"Dangling reference detected: node '{node.name}' references missing node '{arg.name}'.", {"node": node.name, "dangling_ref": arg.name})
+
+            torch.fx.node.map_arg(node.args, check_dangling)
+            torch.fx.node.map_arg(node.kwargs, check_dangling)
+    else:
+        raise IRValidationError(f"Unsupported IR type for validation: {type(ir)}", {"type": str(type(ir))})
+
     return True
+
 
 def validate_compilation(compiled_binary, backend):
     if not compiled_binary:
@@ -359,43 +431,46 @@ def _compile_kernel_binary(kinetic_target, backend, kernel_fn=None):
             logger.warning(f"Triton compilation unavailable ({exc}); producing mock ELF")
             _artifact_kind = "mock"
             return _build_test_only_mock_elf(backend)
-        raise RuntimeError(f"Triton kernel compilation failed: {exc}") from exc
+        raise TritonCompilationError(f"Triton kernel compilation failed: {exc}", {"kinetic_target": kinetic_target}) from exc
 
 
 # ---------------------------------------------------------------------------
-# Helper: build an op-graph descriptor as JSON bytes
+# Helper: build an op-graph descriptor as a dict
 # ---------------------------------------------------------------------------
 def _build_op_graph_data(model):
     """
     If *model* is provided, trace with ``torch.fx`` and serialise node
-    op-names into a JSON object. Always includes the artifact_kind field.
-    Returns a list of ints (bytes) representing the UTF-8 encoded JSON.
+    op-names into a dictionary. Always includes the artifact_kind field.
+    Returns a dict ready for validation and serialization.
     """
     global _artifact_kind
 
     if model is None:
         # Minimal valid placeholder with artifact_kind
-        data = {"artifact_kind": _artifact_kind, "graph": ["placeholder"]}
-        json_str = json.dumps(data)
-        return list(json_str.encode('utf-8'))
+        data = {"artifact_kind": _artifact_kind, "graph": ["placeholder"], "version": 1}
+        return data
 
     try:
         import torch as _torch
         graph = _torch.fx.symbolic_trace(model)
+
+        # Validate the GraphModule directly before extracting node strings
+        _validate_ir(graph)
+
         node_names = [n.name for n in graph.graph.nodes]
         data = {
             "artifact_kind": _artifact_kind,
             "graph": node_names,
             "version": 1,
         }
-        json_str = json.dumps(data)
         logger.info(f"Built op_graph_data with {len(node_names)} nodes from torch.fx trace, artifact_kind={_artifact_kind}")
-        return list(json_str.encode('utf-8'))
+        return data
+    except IRValidationError:
+        raise
     except Exception as exc:
         logger.warning(f"torch.fx tracing failed ({exc}); returning minimal op_graph_data")
-        data = {"artifact_kind": _artifact_kind, "graph": ["fallback"]}
-        json_str = json.dumps(data)
-        return list(json_str.encode('utf-8'))
+        data = {"artifact_kind": _artifact_kind, "graph": ["fallback"], "version": 1}
+        return data
 
 
 # ---------------------------------------------------------------------------
@@ -454,7 +529,7 @@ def native_triton_compile(kinetic_target, kernel_fn=None):
             logger.warning(f"Native Triton compilation unavailable ({exc}); producing mock ELF")
             _artifact_kind = "mock"
             return _build_test_only_mock_elf(backend)
-        raise RuntimeError(f"Native Triton compilation failed: {exc}") from exc
+        raise TritonCompilationError(f"Native Triton compilation failed: {exc}", {"kinetic_target": kinetic_target}) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -483,13 +558,18 @@ def compile_and_serialize(engine, serializer, output_filepath, device_id=None, m
     # Step 3 — build op-graph descriptor (now includes artifact_kind)
     op_graph_data = _build_op_graph_data(model)
 
+    # Rigorous IR Validation right before passing to the C++ PyBind11 serializer layer
+    _validate_ir(op_graph_data)
+
+    op_graph_bytes = list(json.dumps(op_graph_data).encode('utf-8'))
+
     # Step 4 — serialise to .kin
     serializer.save_kin_file(
         output_filepath,
         device_id,
         kinetic_target,
         weights_hash,
-        op_graph_data,
+        op_graph_bytes,
         list(compiled_binary),
     )
     logger.info(f"Compiled and serialized to {output_filepath}")
