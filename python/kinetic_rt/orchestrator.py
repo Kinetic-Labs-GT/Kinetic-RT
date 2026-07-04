@@ -1,6 +1,7 @@
 from contextlib import contextmanager
 from typing import List
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,11 @@ class StreamContext:
         return False
 
 
+class DeviceMismatchError(ValueError):
+    """Raised when host tensors are about to cross into GPU runtime paths."""
+    pass
+
+
 class TensorValidationError(ValueError):
     """Raised when a tensor fails the zero-copy pre-flight validation.
 
@@ -55,6 +61,50 @@ _DTYPE_NAMES = {
     "torch.int8":     "int8",
     "torch.bool":     "bool",
 }
+
+
+_FATAL_DEVICE_MISMATCH = (
+    "FATAL: Boundary Mismatch. Passed host (CPU) memory pointer to a native "
+    "hardware accelerator (GPU/HIP) backend path."
+)
+
+
+def _env_flag_enabled(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def allows_mock_device_residency() -> bool:
+    """Return True only for explicit mock/headless verification modes."""
+    return _env_flag_enabled("MOCK_HIP") or _env_flag_enabled("KINETIC_ALLOW_MOCKS")
+
+
+def validate_tensor_device_residency(
+    tensor, *, backend_expects_accelerator: bool = True, name: str = "tensor"
+) -> None:
+    """Fail closed before a tensor pointer crosses into native GPU/HIP code.
+
+    Native Kinetic-RT routers execute accelerator runtime operations against
+    the forwarded address. A CPU tensor's ``data_ptr()`` is a host virtual
+    address and is not safe to reinterpret as device memory. Explicit mock
+    modes are the only permitted CPU pass-through for CI/headless tests.
+    """
+    if not backend_expects_accelerator or allows_mock_device_residency():
+        return
+
+    if not HAS_TORCH:
+        raise RuntimeError("PyTorch is required to validate tensor device residency.")
+
+    if not isinstance(tensor, torch.Tensor):
+        raise DeviceMismatchError(
+            f"{name}: expected torch.Tensor for device residency validation."
+        )
+
+    if tensor.device.type != "cuda" or not tensor.is_cuda:
+        raise DeviceMismatchError(
+            f"{_FATAL_DEVICE_MISMATCH} {name}: device={tensor.device}, "
+            "expected a native CUDA/HIP device tensor. Set MOCK_HIP=1 or "
+            "KINETIC_ALLOW_MOCKS=1 only for explicit mock/headless verification."
+        )
 
 
 def _dtype_name(dtype) -> str:
@@ -180,9 +230,6 @@ def validate_tensor_for_zero_copy(tensor, *, expected_dtype, name: str = "tensor
     return ptr
 
 
-import os
-
-
 class KineticRuntime:
     def __init__(self, engine, wrapper=None, tokenizer_name=None):
         self.engine = engine  # Acts as router if wrapper is None
@@ -234,6 +281,13 @@ class KineticRuntime:
         for i in range(min(self.tp_degree, len(self.model_paths))):
             self.engine.load_model(self.model_paths[i])
 
+    def _validate_device_residency(
+        self, tensor: "torch.Tensor", *, name: str = "tensor"
+    ) -> None:
+        validate_tensor_device_residency(
+            tensor, backend_expects_accelerator=True, name=name
+        )
+
     def _convert_tensor(self, tensor: "torch.Tensor", *, expected_dtype, name: str = "tensor") -> int:
         """Validate a tensor and return its data_ptr() as an int.
 
@@ -250,6 +304,7 @@ class KineticRuntime:
         Returns:
             The validated data_ptr() as an int.
         """
+        self._validate_device_residency(tensor, name=name)
         return validate_tensor_for_zero_copy(
             tensor, expected_dtype=expected_dtype, name=name
         )
@@ -265,6 +320,7 @@ class KineticRuntime:
         descriptor directly are still caught).
         """
         # Fail fast on the Python side before paying for the FFI crossing.
+        self._validate_device_residency(tensor, name=name)
         validate_tensor_for_zero_copy(
             tensor, expected_dtype=expected_dtype, name=name
         )

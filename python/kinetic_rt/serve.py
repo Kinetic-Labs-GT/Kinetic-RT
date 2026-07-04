@@ -5,7 +5,11 @@ from typing import AsyncGenerator, Dict, List, Optional
 from pydantic import BaseModel, Field
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
-from .orchestrator import KineticRuntime, validate_tensor_for_zero_copy
+from .orchestrator import (
+    KineticRuntime,
+    validate_tensor_device_residency,
+    validate_tensor_for_zero_copy,
+)
 from ._core import HardwareRouter, InferenceQueue, InferenceWorker
 
 logger = logging.getLogger(__name__)
@@ -95,6 +99,9 @@ class KineticServer:
             # pointer. The descriptor overload derives input_len from the
             # shape, so we drop the explicit input_len argument here.
             desc_name = f"serve._async_generate[{req_id}].input_tensor"
+            validate_tensor_device_residency(
+                input_tensor, backend_expects_accelerator=True, name=desc_name
+            )
             validate_tensor_for_zero_copy(input_tensor, expected_dtype=torch.int32, name=desc_name)
 
             from ._core import TensorDescriptor
