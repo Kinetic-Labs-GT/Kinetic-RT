@@ -167,10 +167,10 @@ class TritonCompilationError(Exception):
     def __init__(self, message, context=None):
         self.message = message
         self.context = context or {}
-        full_msg = f"TritonCompilationError: {message}"
+        full_msg = message
         if self.context:
             full_msg += f" | Context: {json.dumps(self.context, default=str)}"
-        logger.error(full_msg)
+        logger.error(f"TritonCompilationError: {full_msg}")
         super().__init__(full_msg)
 
 

@@ -5,7 +5,7 @@ from typing import AsyncGenerator, Dict, List, Optional
 from pydantic import BaseModel, Field
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
-from .orchestrator import KineticRuntime
+from .orchestrator import KineticRuntime, validate_tensor_for_zero_copy
 from ._core import HardwareRouter, InferenceQueue, InferenceWorker
 
 logger = logging.getLogger(__name__)
@@ -76,14 +76,33 @@ class KineticServer:
         import torch
         device = "cuda" if torch.cuda.is_available() else "cpu"
         input_tensor = torch.tensor(tokens, dtype=torch.int32, device=device)
-        input_ptr = input_tensor.data_ptr()
-        input_len = len(tokens)
+        # Defensively materialize a dense C-contiguous tensor. torch.tensor()
+        # already produces a contiguous tensor, but the explicit check guards
+        # against future refactors that might feed a sliced view in here.
+        if not input_tensor.is_contiguous():
+            input_tensor = input_tensor.contiguous()
 
-        # Pin the tensor in RAM/VRAM for the duration of this request
+        # Pin the tensor in RAM/VRAM for the duration of this request.
+        # The C++ InferenceWorker dereferences asynchronously from
+        # a background thread, so the underlying storage MUST outlive the
+        # request. pinned_tensors holds a strong reference that is released
+        # in the finally block below.
         self.pinned_tensors[req_id] = input_tensor
 
         try:
-            self.queue.submit(input_ptr, input_len, max_tokens, req_id)
+            # Forward a structured TensorDescriptor so the C++ side can
+            # re-verify shape/strides/dtype before dereferencing the raw
+            # pointer. The descriptor overload derives input_len from the
+            # shape, so we drop the explicit input_len argument here.
+            desc_name = f"serve._async_generate[{req_id}].input_tensor"
+            validate_tensor_for_zero_copy(input_tensor, expected_dtype=torch.int32, name=desc_name)
+
+            from ._core import TensorDescriptor
+            input_desc = TensorDescriptor.from_tensor(
+                input_tensor,
+                name=desc_name,
+            )
+            self.queue.submit(input_desc, max_tokens, req_id)
 
             # Loop and poll the lock-free C++ ring buffer natively from asyncio loop
             while True:
