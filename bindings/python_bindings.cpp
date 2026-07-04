@@ -1,6 +1,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <cstdio>
 #include "../include/GraphWrapper.h"
 #include "../include/AOTEngine.h"
 #include "../include/Communicator.h"
@@ -88,6 +89,9 @@ static bool descriptor_is_contiguous(const TensorDescriptor& d) {
     for (size_t i = ndim; i-- > 0; ) {
         if (d.shape[i] != 1 && d.strides[i] != expected) {
             return false;
+        }
+        if (expected > (INT64_MAX / d.shape[i])) {
+            return false; // Prevent overflow and drop unsafe layout configurations
         }
         expected *= d.shape[i];
     }
@@ -196,6 +200,12 @@ static TensorDescriptor make_descriptor_from_tensor(py::object tensor, const cha
 
     size_t numel = tensor.attr("numel")().cast<size_t>();
     d.byte_size = numel * data_type_element_size(d.dtype);
+
+    size_t untyped_bytes = tensor.attr("untyped_storage")().attr("nbytes")().cast<size_t>();
+    if (untyped_bytes < d.byte_size) {
+        throw std::invalid_argument(
+            std::string("torch.Tensor('") + name + "') logical view exceeds actual physical storage allocation bounds.");
+    }
 
     validate_tensor_descriptor(d, name);
     return d;

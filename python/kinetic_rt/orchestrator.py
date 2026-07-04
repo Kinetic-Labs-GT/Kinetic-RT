@@ -154,6 +154,9 @@ def validate_tensor_for_zero_copy(tensor, *, expected_dtype, name: str = "tensor
             "Empty tensors cannot be forwarded across the zero-copy boundary."
         )
 
+    if tensor.untyped_storage().nbytes() < (tensor.numel() * tensor.element_size()):
+        raise ValueError("Tensor logical view exceeds actual physical storage allocation bounds.")
+
     ptr = tensor.data_ptr()
     if ptr == 0:
         raise TensorValidationError(

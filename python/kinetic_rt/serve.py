@@ -94,10 +94,13 @@ class KineticServer:
             # re-verify shape/strides/dtype before dereferencing the raw
             # pointer. The descriptor overload derives input_len from the
             # shape, so we drop the explicit input_len argument here.
+            desc_name = f"serve._async_generate[{req_id}].input_tensor"
+            validate_tensor_for_zero_copy(input_tensor, expected_dtype=torch.int32, name=desc_name)
+
             from ._core import TensorDescriptor
             input_desc = TensorDescriptor.from_tensor(
                 input_tensor,
-                name=f"serve._async_generate[{req_id}].input_tensor",
+                name=desc_name,
             )
             self.queue.submit(input_desc, max_tokens, req_id)
 
