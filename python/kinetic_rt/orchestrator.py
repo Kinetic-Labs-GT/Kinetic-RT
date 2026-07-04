@@ -291,7 +291,13 @@ class KineticRuntime:
                 converted to `int`.
         """
         if self.vocab_size is not None:
-            return int(self.vocab_size)
+            try:
+                resolved = int(self.vocab_size)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"vocab_size must be an integer (got {self.vocab_size!r})") from exc
+            if resolved <= 0:
+                raise ValueError(f"vocab_size must be a positive integer (got {resolved})")
+            return resolved
 
         if self.tokenizer is not None:
             try:
