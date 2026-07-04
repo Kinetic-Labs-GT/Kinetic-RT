@@ -231,11 +231,29 @@ def validate_tensor_for_zero_copy(tensor, *, expected_dtype, name: str = "tensor
 
 
 class KineticRuntime:
-    def __init__(self, engine, wrapper=None, tokenizer_name=None):
+    def __init__(self, engine, wrapper=None, tokenizer_name=None, vocab_size=None):
         self.engine = engine  # Acts as router if wrapper is None
         self.wrapper = wrapper
         self.tp_degree = 1
         self.model_paths = []
+
+        # Explicit override for the output logit-tensor width. Callers that
+        # have direct access to model metadata (e.g. `model.config.vocab_size`
+        # from a HuggingFace `AutoModelForCausalLM`, or a vocab field parsed
+        # out of a `.kin` artifact's header) should pass it here. This is the
+        # only fully authoritative source, since a model's real output
+        # dimension can differ from its tokenizer's nominal vocab size (e.g.
+        # padded-for-TP embeddings, or added/special tokens).
+        #
+        # NOTE: the current `.kin` container (see `Serializer` / `KinHeader`)
+        # does not yet serialize a vocab_size field, so runtimes that only
+        # have a `.kin` artifact and no live HF model cannot recover this
+        # value from the file itself today. Closing that gap fully requires
+        # extending the native header/serializer, which is out of scope for
+        # this allocation-safety fix; `vocab_size` and the tokenizer-derived
+        # fallback below are the dynamic sources actually available in the
+        # Python runtime.
+        self.vocab_size = vocab_size
 
         self.tokenizer = None
         _tok_name = tokenizer_name or "HuggingFaceTB/SmolLM2-135M"
@@ -245,6 +263,45 @@ class KineticRuntime:
             logger.info(f"Loaded tokenizer: {_tok_name}")
         except (ImportError, Exception) as exc:
             logger.warning(f"Could not load tokenizer ({exc}); will use byte-level fallback")
+
+    def _resolve_vocab_size(self) -> int:
+        """Resolve the true output vocabulary width for logit allocation.
+
+        Priority order:
+          1. `self.vocab_size` — an explicit value supplied by the caller
+             (e.g. `model.config.vocab_size`). This always wins because it
+             reflects the model's actual output dimension, which the
+             tokenizer alone cannot guarantee (padded/TP-aligned embeddings,
+             added tokens, etc.).
+          2. `len(self.tokenizer)` — the tokenizer's full vocabulary size
+             including any added/special tokens. Used when no explicit
+             override was given but a tokenizer was loaded successfully.
+          3. 256 — the byte-level fallback path in `generate()` literally
+             emits raw byte values (0-255) as "tokens" when no tokenizer is
+             available, so 256 is the true, non-arbitrary vocabulary size
+             for that code path, not a stand-in default.
+
+        Returns:
+            An integer vocabulary width. The resolver is intentionally
+            fail-soft: malformed tokenizer objects drop to the byte-level
+            fallback instead of raising.
+
+        Raises:
+            ValueError: only if an explicit `self.vocab_size` value cannot be
+                converted to `int`.
+        """
+        if self.vocab_size is not None:
+            return int(self.vocab_size)
+
+        if self.tokenizer is not None:
+            try:
+                return int(len(self.tokenizer))
+            except (AttributeError, TypeError, ValueError):
+                logger.warning(
+                    "Tokenizer object does not expose a usable length; falling back to byte-level vocab size."
+                )
+
+        return 256
 
     def load_model(self, model_dir: str):
         import glob
@@ -339,7 +396,11 @@ class KineticRuntime:
             logger.warning("No tokenizer available, using byte-level fallback")
             tokens = list(prompt.encode('utf-8'))
 
-        vocab_size = 50257  # Standard GPT-2/SmolLM vocabulary size
+        # Dynamic vocabulary width — see `_resolve_vocab_size()`. This must
+        # never be a fixed literal: the C++ execution kernel writes exactly
+        # (seq_len * vocab_size) float32 elements into `output_tensor`, so an
+        # undersized allocation here is a direct VRAM out-of-bounds write.
+        vocab_size = self._resolve_vocab_size()
 
         for _ in range(max_new_tokens):
             input_tensor = torch.tensor(tokens, dtype=torch.int32)
