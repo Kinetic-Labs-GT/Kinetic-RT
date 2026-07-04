@@ -70,7 +70,11 @@ static size_t descriptor_numel(const TensorDescriptor& d) {
     size_t n = 1;
     for (int64_t s : d.shape) {
         if (s <= 0) return 0;
-        n *= static_cast<size_t>(s);
+        const size_t dim = static_cast<size_t>(s);
+        if (n > static_cast<size_t>(-1) / dim) {
+            throw std::invalid_argument("TensorDescriptor numel overflows size_t.");
+        }
+        n *= dim;
     }
     return n;
 }
@@ -178,8 +182,8 @@ static TensorDescriptor make_descriptor_from_tensor(py::object tensor, const cha
         throw std::invalid_argument(
             std::string("torch.Tensor('") + name + "') has storage_offset=" +
             std::to_string(storage_offset) + " (elements). The zero-copy "
-            "boundary requires storage_offset == 0; call tensor.contiguous() "
-            "to materialize a dense view before invoking the runtime.");
+            "boundary requires storage_offset == 0; call tensor.clone() (or tensor.contiguous().clone()) "
+            "to materialize a dense tensor before invoking the runtime.");
     }
 
     py::object dtype_obj = tensor.attr("dtype");

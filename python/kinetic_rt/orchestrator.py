@@ -143,8 +143,8 @@ def validate_tensor_for_zero_copy(tensor, *, expected_dtype, name: str = "tensor
             "data_ptr() addresses the start of the underlying storage, but "
             "the logical view begins at a non-zero offset, so the C++ base "
             "pointer would dereference memory belonging to a sibling view. "
-            "Remediation: call tensor.contiguous() to materialize a fresh "
-            "dense tensor whose storage_offset is 0."
+            "Remediation: call tensor.clone() (or tensor.contiguous().clone()) "
+            "to materialize a fresh dense tensor whose storage_offset is 0."
         )
 
     # --- Sanity: zero-length tensors have no valid base pointer -----------
@@ -155,7 +155,9 @@ def validate_tensor_for_zero_copy(tensor, *, expected_dtype, name: str = "tensor
         )
 
     if tensor.untyped_storage().nbytes() < (tensor.numel() * tensor.element_size()):
-        raise ValueError("Tensor logical view exceeds actual physical storage allocation bounds.")
+        raise TensorValidationError(
+            f"{name}: tensor logical view exceeds actual physical storage allocation bounds."
+        )
 
     ptr = tensor.data_ptr()
     if ptr == 0:
