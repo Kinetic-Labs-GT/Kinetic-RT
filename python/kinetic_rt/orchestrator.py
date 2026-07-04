@@ -301,12 +301,16 @@ class KineticRuntime:
 
         if self.tokenizer is not None:
             try:
-                return int(len(self.tokenizer))
+                resolved = int(len(self.tokenizer))
+                if resolved > 0:
+                    return resolved
+                logger.warning(
+                    f"Tokenizer length resolved to {resolved}; falling back to byte-level vocab size."
+                )
             except (AttributeError, TypeError, ValueError):
                 logger.warning(
                     "Tokenizer object does not expose a usable length; falling back to byte-level vocab size."
                 )
-
         return 256
 
     def load_model(self, model_dir: str):
