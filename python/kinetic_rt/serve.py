@@ -3,16 +3,25 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
+import uuid
 from collections import defaultdict, deque
 from threading import Lock
 from typing import Any, AsyncGenerator, Deque, Dict, List, Optional
 
+import torch
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ._core import HardwareRouter, InferenceQueue, InferenceWorker
-from .orchestrator import KineticRuntime, RuntimeConfigurationError, validate_tensor_device_residency, validate_tensor_for_zero_copy
+from .orchestrator import (
+    ContextWindowExceededError,
+    KineticRuntime,
+    RuntimeConfigurationError,
+    validate_tensor_device_residency,
+    validate_tensor_for_zero_copy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,12 +84,13 @@ class KineticServer:
         vocab_size: Optional[int] = None,
         request_timeout_s: float = 30.0,
         poll_interval_s: float = 0.001,
+        max_seq_len: Optional[int] = None,
     ):
         self.app = FastAPI(title="Kinetic-RT Streaming API")
         self.router = HardwareRouter()
         self.queue = InferenceQueue()
         self.worker = InferenceWorker(self.queue, self.router)
-        self.runtime = KineticRuntime(self.router, None, tokenizer_name=tokenizer_name, vocab_size=vocab_size)
+        self.runtime = KineticRuntime(self.router, None, tokenizer_name=tokenizer_name, vocab_size=vocab_size, max_seq_len=max_seq_len)
 
         self.request_timeout_s = float(request_timeout_s)
         self.poll_interval_s = float(poll_interval_s)
@@ -90,6 +100,7 @@ class KineticServer:
             raise ValueError("poll_interval_s must be > 0.")
 
         self.pinned_tensors: Dict[str, Any] = {}
+        self._pinned_tensors_lock = Lock()
         self._pending_responses: Dict[str, Deque[Dict[str, Any]]] = defaultdict(deque)
         self._pending_lock = Lock()
 
@@ -117,6 +128,14 @@ class KineticServer:
                 self._pending_responses.pop(request_id, None)
             return response
 
+    def _pin_tensor(self, request_id: str, tensor: Any) -> None:
+        with self._pinned_tensors_lock:
+            self.pinned_tensors[request_id] = tensor
+
+    def _unpin_tensor(self, request_id: str) -> None:
+        with self._pinned_tensors_lock:
+            self.pinned_tensors.pop(request_id, None)
+
     def _encode_prompt(self, prompt: str) -> List[int]:
         return self.runtime.encode_prompt(prompt)
 
@@ -129,14 +148,37 @@ class KineticServer:
     ) -> AsyncGenerator[str, None]:
         tokens = self._encode_prompt(prompt)
 
-        import torch
+        # Fail-closed check happens BEFORE any tensor is created or pinned, so
+        # there is nothing to leak on this path. This mirrors the exact
+        # fail-closed contract enforced by KineticRuntime.generate(), instead
+        # of silently degrading to an empty response.
+        if len(tokens) >= self.runtime.max_seq_len:
+            logger.warning(
+                "Request %s rejected: prompt length %d already meets or exceeds max_seq_len %d.",
+                req_id, len(tokens), self.runtime.max_seq_len,
+            )
+            raise ContextWindowExceededError(
+                "FATAL: Context window limit exceeded. "
+                "Sequence length matches or outstrips max_seq_len."
+            )
+
+        allowed_tokens = max(0, self.runtime.max_seq_len - len(tokens))
+        max_tokens = min(max_tokens, allowed_tokens)
+        # Defensive guard: allowed_tokens can only be <= 0 here if the check
+        # above already fired, but keep this as a belt-and-suspenders bound
+        # in case max_seq_len or tokens are mutated concurrently.
+        if max_tokens <= 0:
+            raise ContextWindowExceededError(
+                "FATAL: Context window limit exceeded. "
+                "Sequence length matches or outstrips max_seq_len."
+            )
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         input_tensor = torch.tensor(tokens, dtype=torch.int32, device=device)
         if not input_tensor.is_contiguous():
             input_tensor = input_tensor.contiguous()
 
-        self.pinned_tensors[req_id] = input_tensor
+        self._pin_tensor(req_id, input_tensor)
 
         try:
             desc_name = f"serve._async_generate[{req_id}].input_tensor"
@@ -146,6 +188,7 @@ class KineticServer:
             self.queue.submit(input_tensor.data_ptr(), len(tokens), max_tokens, req_id)
 
             deadline = asyncio.get_running_loop().time() + self.request_timeout_s
+            generated_token_count = 0
 
             while True:
                 if http_request is not None and await http_request.is_disconnected():
@@ -173,9 +216,23 @@ class KineticServer:
                     token = resp.get("token", "")
                     if resp.get("is_finished"):
                         if token:
-                            yield token
+                            generated_token_count += 1
+                            if generated_token_count <= max_tokens:
+                                yield token
+                            else:
+                                logger.warning(
+                                    "Token count %d exceeded clamped max_tokens %d for request %s; terminating safely.",
+                                    generated_token_count, max_tokens, req_id,
+                                )
                         break
                     if token:
+                        generated_token_count += 1
+                        if generated_token_count > max_tokens:
+                            logger.warning(
+                                "Token count %d exceeded clamped max_tokens %d for request %s; terminating safely.",
+                                generated_token_count, max_tokens, req_id,
+                            )
+                            break
                         yield token
                     continue
 
@@ -184,20 +241,20 @@ class KineticServer:
 
                 await asyncio.sleep(self.poll_interval_s)
         finally:
-            self.pinned_tensors.pop(req_id, None)
+            self._unpin_tensor(req_id)
             with self._pending_lock:
                 self._pending_responses.pop(req_id, None)
 
     async def openai_chat_completions(self, request: ChatCompletionRequest, http_request: Request):
         prompt = " ".join(m.content for m in request.messages)
-        max_tokens = self._normalize_request_tokens(request.max_tokens, default=10)
+        try:
+            max_tokens = self._normalize_request_tokens(request.max_tokens, default=10)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         if request.stream:
 
             async def generate():
-                import time
-                import uuid
-
                 req_id = str(uuid.uuid4())
                 created = int(time.time())
                 yield (
@@ -221,8 +278,18 @@ class KineticServer:
                             ],
                         )
                         yield f"data: {chunk.model_dump_json(exclude_none=True)}\n\n"
+                except ContextWindowExceededError as exc:
+                    yield f"data: {json.dumps({'id': req_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': request.model, 'choices': [{'index': 0, 'delta': {'content': ''}, 'finish_reason': 'context_length_exceeded'}], 'error': str(exc)})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
                 except TimeoutError as exc:
                     yield f"data: {json.dumps({'id': req_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': request.model, 'choices': [{'index': 0, 'delta': {'content': ''}, 'finish_reason': 'timeout'}], 'error': str(exc)})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+                except (RuntimeConfigurationError, RuntimeError) as exc:
+                    logger.error("Generation failed for request %s: %s", req_id, exc)
+                    yield f"data: {json.dumps({'id': req_id, 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': request.model, 'choices': [{'index': 0, 'delta': {'content': ''}, 'finish_reason': 'error'}], 'error': str(exc)})}\n\n"
+                    yield "data: [DONE]\n\n"
                     return
 
                 yield (
@@ -232,23 +299,28 @@ class KineticServer:
 
             return StreamingResponse(generate(), media_type="text/event-stream")
 
-        req_id = __import__("uuid").uuid4().hex
+        req_id = uuid.uuid4().hex
         tokens_list = []
         try:
             async for token in self._async_generate(prompt, max_tokens, req_id, http_request=http_request):
                 if token == "<|endoftext|>":
                     break
                 tokens_list.append(token)
+        except ContextWindowExceededError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
         except TimeoutError as exc:
             raise HTTPException(status_code=408, detail=str(exc)) from exc
         except RuntimeConfigurationError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            logger.error("Generation failed for request %s: %s", req_id, exc)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
         full_text = "".join(tokens_list)
         return {
             "id": "chatcmpl-123",
             "object": "chat.completion",
-            "created": __import__("time").time_ns() // 1_000_000_000,
+            "created": time.time_ns() // 1_000_000_000,
             "model": request.model,
             "choices": [
                 {
@@ -261,14 +333,14 @@ class KineticServer:
 
     async def anthropic_messages(self, request: AnthropicMessageRequest, http_request: Request):
         prompt = " ".join(m.content for m in request.messages)
-        max_tokens = self._normalize_request_tokens(request.max_tokens, default=10)
+        try:
+            max_tokens = self._normalize_request_tokens(request.max_tokens, default=10)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         if request.stream:
 
             async def generate():
-                import time
-                import uuid
-
                 req_id = str(uuid.uuid4())
                 yield "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_1\", \"type\": \"message\", \"role\": \"assistant\", \"content\": [], \"model\": \"claude-3\"}}\n\n"
                 yield "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\n"
@@ -278,8 +350,15 @@ class KineticServer:
                         if token == "<|endoftext|>":
                             break
                         yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': token}})}\n\n"
+                except ContextWindowExceededError as exc:
+                    yield f"event: error\ndata: {json.dumps({'type': 'error', 'error': {'type': 'context_length_exceeded', 'message': str(exc)}})}\n\n"
+                    return
                 except TimeoutError as exc:
-                    yield f"event: error\ndata: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+                    yield f"event: error\ndata: {json.dumps({'type': 'error', 'error': {'type': 'timeout', 'message': str(exc)}})}\n\n"
+                    return
+                except (RuntimeConfigurationError, RuntimeError) as exc:
+                    logger.error("Generation failed for request %s: %s", req_id, exc)
+                    yield f"event: error\ndata: {json.dumps({'type': 'error', 'error': {'type': 'api_error', 'message': str(exc)}})}\n\n"
                     return
 
                 yield "event: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\n"
@@ -287,16 +366,21 @@ class KineticServer:
 
             return StreamingResponse(generate(), media_type="text/event-stream")
 
-        req_id = __import__("uuid").uuid4().hex
+        req_id = uuid.uuid4().hex
         tokens_list = []
         try:
             async for token in self._async_generate(prompt, max_tokens, req_id, http_request=http_request):
                 if token == "<|endoftext|>":
                     break
                 tokens_list.append(token)
+        except ContextWindowExceededError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
         except TimeoutError as exc:
             raise HTTPException(status_code=408, detail=str(exc)) from exc
         except RuntimeConfigurationError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            logger.error("Generation failed for request %s: %s", req_id, exc)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
         full_text = "".join(tokens_list)

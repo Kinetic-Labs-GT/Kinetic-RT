@@ -53,6 +53,16 @@ class RuntimeConfigurationError(ValueError):
     """Raised when runtime configuration is internally inconsistent."""
 
 
+class ContextWindowExceededError(RuntimeConfigurationError):
+    """Raised when a sequence already meets or exceeds ``max_seq_len``.
+
+    Kept as a dedicated, catchable subclass (rather than a bare ``ValueError``)
+    so callers -- in particular the HTTP serving layer -- can distinguish
+    "context window exhausted" from other configuration errors and map it to
+    an appropriate status code instead of silently degrading.
+    """
+
+
 _DTYPE_NAMES = {
     "torch.float32": "float32",
     "torch.float16": "float16",
@@ -68,8 +78,14 @@ _FATAL_DEVICE_MISMATCH = (
     "hardware accelerator (GPU/HIP) backend path."
 )
 
+_FATAL_CONTEXT_WINDOW_EXCEEDED = (
+    "FATAL: Context window limit exceeded. "
+    "Sequence length matches or outstrips max_seq_len."
+)
+
 _DEFAULT_BYTE_VOCAB = 256
 _DEFAULT_TOKENIZER_NAME = "HuggingFaceTB/SmolLM2-135M"
+_DEFAULT_MAX_SEQ_LEN = 2048
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -185,12 +201,13 @@ def _try_normalize_int(value: Any, *, name: str, minimum: int) -> Optional[int]:
 
 
 class KineticRuntime:
-    def __init__(self, engine, wrapper=None, tokenizer_name=None, vocab_size=None):
+    def __init__(self, engine, wrapper=None, tokenizer_name=None, vocab_size=None, max_seq_len=None):
         self.engine = engine
         self.wrapper = wrapper
         self.tp_degree = 1
         self.model_paths = []
         self.vocab_size = vocab_size
+        self.max_seq_len = self._resolve_max_seq_len(max_seq_len)
 
         self.tokenizer = None
         self._tokenizer_name = tokenizer_name or _DEFAULT_TOKENIZER_NAME
@@ -201,6 +218,30 @@ class KineticRuntime:
             logger.info("Loaded tokenizer: %s", self._tokenizer_name)
         except (ImportError, Exception) as exc:
             logger.warning("Could not load tokenizer (%s); will use byte-level fallback", exc)
+
+    def _resolve_max_seq_len(self, explicit_max_seq_len: Optional[int]) -> int:
+        """Resolve the maximum sequence length using a strict fallback hierarchy."""
+
+        if explicit_max_seq_len is not None:
+            resolved = _try_normalize_int(explicit_max_seq_len, name="max_seq_len", minimum=1)
+            if resolved is not None:
+                return resolved
+
+        if self.wrapper is not None:
+            wrapper_max_seq_len = getattr(self.wrapper, "max_seq_len", None)
+            if wrapper_max_seq_len is not None:
+                resolved = _try_normalize_int(wrapper_max_seq_len, name="wrapper.max_seq_len", minimum=1)
+                if resolved is not None:
+                    return resolved
+
+        if self.engine is not None:
+            engine_max_seq_len = getattr(self.engine, "max_seq_len", None)
+            if engine_max_seq_len is not None:
+                resolved = _try_normalize_int(engine_max_seq_len, name="engine.max_seq_len", minimum=1)
+                if resolved is not None:
+                    return resolved
+
+        return _DEFAULT_MAX_SEQ_LEN
 
     def _iter_tokenizer_vocab_candidates(self) -> Iterable[tuple[str, Any]]:
         tokenizer = self.tokenizer
@@ -383,7 +424,13 @@ class KineticRuntime:
         tokens = self.encode_prompt(prompt)
         vocab_size = self._resolve_vocab_size()
 
+        if len(tokens) >= self.max_seq_len:
+            raise ContextWindowExceededError(_FATAL_CONTEXT_WINDOW_EXCEEDED)
+
         for _ in range(max_new_tokens):
+            if len(tokens) >= self.max_seq_len:
+                break
+
             device = "cuda" if HAS_TORCH and torch.cuda.is_available() else "cpu"
             input_tensor = torch.tensor(tokens, dtype=torch.int32, device=device)
             if not input_tensor.is_contiguous():
