@@ -111,3 +111,8 @@ logs/
 .vscode/
 .idea/
 .DS_Store
+# Local patch artifacts
+*.diff
+*.patch
+*.orig
+*.rej
