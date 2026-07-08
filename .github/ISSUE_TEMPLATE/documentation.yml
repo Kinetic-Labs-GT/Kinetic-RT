@@ -1,0 +1,30 @@
+name: Documentation Improvement
+description: Suggest improvements or report issues in documentation
+labels: ["documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping us improve our documentation!
+  - type: input
+    id: docs_affected
+    attributes:
+      label: Documentation affected
+      description: Which file or section needs improvement?
+      placeholder: e.g., README.md, CONTRIBUTING.md, or inline docstrings in a specific file.
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested improvement
+      description: How should the documentation be updated?
+    validations:
+      required: true
+  - type: textarea
+    id: reason
+    attributes:
+      label: Reason
+      description: Why is this change necessary? (e.g., outdated info, unclear instructions, typo)
+    validations:
+      required: true
