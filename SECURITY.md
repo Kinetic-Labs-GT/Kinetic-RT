@@ -18,7 +18,12 @@ If you discover a security vulnerability within Kinetic-RT, please report it pri
 
 To report a vulnerability, please email the security contact:
 
-* **Email:** [MAINTAINER_SECURITY_EMAIL_PLACEHOLDER]
+**Note**
+Before the first public release, maintainers should replace the placeholder below with the project's official security contact.
+
+**Security Contact**
+
+Email: `[MAINTAINER_SECURITY_EMAIL_PLACEHOLDER]`
 
 ### What to Include in Your Report
 
