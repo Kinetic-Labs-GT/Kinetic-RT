@@ -47,7 +47,9 @@ enum class Owner : uint8_t {
 
 const char* to_string(Owner owner);
 
-// Typed pointer forward declarations replacing raw void*
+// Typed pointer forward declarations replacing raw void*.
+// Note: Tokenizer, LogicalDecodeState, and KVBlockTable are intentionally forward-declared
+// opaque typed handles in Chapter 1. Full definitions are provided in subsequent chapter PRs.
 class Tokenizer;
 struct LogicalDecodeState;
 struct KVBlockTable;
@@ -90,6 +92,9 @@ public:
     RequestContext& operator=(const RequestContext&) = delete;
     RequestContext(RequestContext&&) = delete;
     RequestContext& operator=(RequestContext&&) = delete;
+
+    // Destructor perform defensive resource cleanup if uncleaned,
+    // but never mutates observable lifecycle state (state_ remains unchanged).
     ~RequestContext();
 
     // Immutable configuration & metadata accessors
@@ -160,7 +165,11 @@ public:
     void set_error_code(int code) noexcept;
     int error_code() const noexcept;
 
-    // Teardown & cleanup framework
+    // Teardown & explicit cleanup framework:
+    // - Primary teardown path invoked after reaching a terminal state.
+    // - Idempotent: second call returns false without re-executing callbacks.
+    // - Executes registered cleanup callbacks in LIFO order.
+    // - Terminal-gated to prevent racing with in-flight backend steps.
     void register_cleanup_callback(std::function<void()> callback);
     bool is_cleaned_up() const noexcept;
     bool cleanup();

@@ -355,25 +355,35 @@ void test_cleanup_framework() {
     std::cout << "[PASS] test_cleanup_framework" << std::endl;
 }
 
-void test_destructor_defensive_cleanup() {
+void test_destructor_non_mutating_lifecycle() {
     bool callback_executed = false;
-    RequestState observed_state = RequestState::RECEIVED;
+    RequestState state_before_destruction = RequestState::DECODE;
+    RequestState state_inside_callback = RequestState::RECEIVED;
 
     {
         RequestContext::Config config;
         config.request_id = "req_009";
         RequestContext ctx(config);
-        ctx.register_cleanup_callback([&callback_executed]() {
+        ctx.transition_to(RequestState::VALIDATED);
+        ctx.transition_to(RequestState::TOKENIZED);
+        ctx.transition_to(RequestState::ENQUEUED);
+        ctx.transition_to(RequestState::PREFILL);
+        ctx.transition_to(RequestState::DECODE);
+        state_before_destruction = ctx.state();
+
+        ctx.register_cleanup_callback([&ctx, &callback_executed, &state_inside_callback]() {
             callback_executed = true;
+            state_inside_callback = ctx.state();
         });
-        observed_state = ctx.state();
         // Destructor runs here without explicit cleanup or terminal transition
     }
 
     assert(callback_executed);
-    assert(observed_state == RequestState::RECEIVED); // Non-mutating destructor requirement!
+    assert(state_before_destruction == RequestState::DECODE);
+    // Crucial check: destructor performed defensive cleanup WITHOUT mutating state_ to FAILED
+    assert(state_inside_callback == RequestState::DECODE);
 
-    std::cout << "[PASS] test_destructor_defensive_cleanup" << std::endl;
+    std::cout << "[PASS] test_destructor_non_mutating_lifecycle" << std::endl;
 }
 
 void test_kv_and_device_pointers() {
@@ -477,7 +487,7 @@ int main() {
     test_cancellation_multithreaded();
     test_timeout_expiration();
     test_cleanup_framework();
-    test_destructor_defensive_cleanup();
+    test_destructor_non_mutating_lifecycle();
     test_kv_and_device_pointers();
     test_typed_pointers_and_tokens();
 
