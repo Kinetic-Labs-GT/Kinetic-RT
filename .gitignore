@@ -116,3 +116,5 @@ logs/
 *.patch
 *.orig
 *.rej
+
+Context/
