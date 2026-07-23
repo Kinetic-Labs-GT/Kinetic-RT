@@ -102,10 +102,22 @@ RequestContext::RequestContext(Config config, int /* validated_tag */)
       owner_(config.initial_owner) {}
 
 RequestContext::~RequestContext() {
-    std::unique_lock<std::mutex> lock(mutex_);
-    if (!cleaned_up_) {
-        execute_cleanup_callbacks_locked();
-        cleaned_up_ = true;
+    std::vector<std::function<void()>> callbacks_to_run;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!cleaned_up_) {
+            callbacks_to_run = extract_cleanup_callbacks_locked();
+        }
+    }
+    // Execute callbacks outside the critical section to prevent deadlocks
+    for (auto it = callbacks_to_run.rbegin(); it != callbacks_to_run.rend(); ++it) {
+        if (*it) {
+            try {
+                (*it)();
+            } catch (...) {
+                // Suppress exceptions during destructor cleanup execution
+            }
+        }
     }
 }
 
@@ -355,24 +367,20 @@ bool RequestContext::is_cleaned_up() const noexcept {
 }
 
 bool RequestContext::cleanup() {
-    std::unique_lock<std::mutex> lock(mutex_);
-    if (!is_terminal(state_)) {
-        throw RequestContextError("Cannot cleanup RequestContext before reaching terminal state (current state: " + std::string(to_string(state_)) + ")");
+    std::vector<std::function<void()>> callbacks_to_run;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!is_terminal(state_)) {
+            throw RequestContextError("Cannot cleanup RequestContext before reaching terminal state (current state: " + std::string(to_string(state_)) + ")");
+        }
+        if (cleaned_up_) {
+            return false;
+        }
+        callbacks_to_run = extract_cleanup_callbacks_locked();
     }
-    return cleanup_locked(lock);
-}
 
-bool RequestContext::cleanup_locked(std::unique_lock<std::mutex>& /* lock */) {
-    if (cleaned_up_) {
-        return false;
-    }
-    execute_cleanup_callbacks_locked();
-    cleaned_up_ = true;
-    return true;
-}
-
-void RequestContext::execute_cleanup_callbacks_locked() {
-    for (auto it = cleanup_callbacks_.rbegin(); it != cleanup_callbacks_.rend(); ++it) {
+    // Execute callbacks outside the critical section to prevent deadlocks
+    for (auto it = callbacks_to_run.rbegin(); it != callbacks_to_run.rend(); ++it) {
         if (*it) {
             try {
                 (*it)();
@@ -381,5 +389,12 @@ void RequestContext::execute_cleanup_callbacks_locked() {
             }
         }
     }
+    return true;
+}
+
+std::vector<std::function<void()>> RequestContext::extract_cleanup_callbacks_locked() {
+    cleaned_up_ = true;
+    std::vector<std::function<void()>> callbacks = std::move(cleanup_callbacks_);
     cleanup_callbacks_.clear();
+    return callbacks;
 }

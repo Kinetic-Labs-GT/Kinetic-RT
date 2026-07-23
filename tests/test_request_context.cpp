@@ -355,6 +355,37 @@ void test_cleanup_framework() {
     std::cout << "[PASS] test_cleanup_framework" << std::endl;
 }
 
+void test_cleanup_callback_reentrancy_no_deadlock() {
+    RequestContext::Config config;
+    config.request_id = "req_reentrant_cleanup";
+    RequestContext ctx(config);
+
+    bool reentrant_call_succeeded = false;
+    ctx.register_cleanup_callback([&ctx, &reentrant_call_succeeded]() {
+        // A cleanup callback invoking context methods (which acquire mutex_)
+        // Must NOT deadlock now that callbacks execute outside the critical section!
+        RequestState s = ctx.state();
+        bool cleaned = ctx.is_cleaned_up();
+        if (s == RequestState::COMPLETE && cleaned) {
+            reentrant_call_succeeded = true;
+        }
+    });
+
+    ctx.transition_to(RequestState::VALIDATED);
+    ctx.transition_to(RequestState::TOKENIZED);
+    ctx.transition_to(RequestState::ENQUEUED);
+    ctx.transition_to(RequestState::PREFILL);
+    ctx.transition_to(RequestState::DECODE);
+    ctx.transition_to(RequestState::STREAMING);
+    ctx.transition_to(RequestState::COMPLETE);
+
+    bool ok = ctx.cleanup();
+    assert(ok);
+    assert(reentrant_call_succeeded);
+
+    std::cout << "[PASS] test_cleanup_callback_reentrancy_no_deadlock" << std::endl;
+}
+
 void test_destructor_non_mutating_lifecycle() {
     bool callback_executed = false;
     RequestState state_before_destruction = RequestState::DECODE;
@@ -487,6 +518,7 @@ int main() {
     test_cancellation_multithreaded();
     test_timeout_expiration();
     test_cleanup_framework();
+    test_cleanup_callback_reentrancy_no_deadlock();
     test_destructor_non_mutating_lifecycle();
     test_kv_and_device_pointers();
     test_typed_pointers_and_tokens();

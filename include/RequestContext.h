@@ -93,7 +93,7 @@ public:
     RequestContext(RequestContext&&) = delete;
     RequestContext& operator=(RequestContext&&) = delete;
 
-    // Destructor perform defensive resource cleanup if uncleaned,
+    // Destructor performs defensive resource cleanup if uncleaned,
     // but never mutates observable lifecycle state (state_ remains unchanged).
     ~RequestContext();
 
@@ -168,7 +168,7 @@ public:
     // Teardown & explicit cleanup framework:
     // - Primary teardown path invoked after reaching a terminal state.
     // - Idempotent: second call returns false without re-executing callbacks.
-    // - Executes registered cleanup callbacks in LIFO order.
+    // - Executes registered cleanup callbacks outside the critical section in LIFO order.
     // - Terminal-gated to prevent racing with in-flight backend steps.
     void register_cleanup_callback(std::function<void()> callback);
     bool is_cleaned_up() const noexcept;
@@ -178,8 +178,7 @@ private:
     static Config validate_config(Config config);
     RequestContext(Config config, int /* validated_tag */);
     void transition_to_locked(RequestState to, std::unique_lock<std::mutex>& lock);
-    bool cleanup_locked(std::unique_lock<std::mutex>& lock);
-    void execute_cleanup_callbacks_locked();
+    std::vector<std::function<void()>> extract_cleanup_callbacks_locked();
 
     // Immutable request-scoped fields
     const std::string request_id_;
