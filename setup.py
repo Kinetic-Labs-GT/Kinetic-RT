@@ -152,7 +152,7 @@ if mock_hip:
 ext_modules = [
     Extension(
         'python.kinetic_rt._core',
-        ['bindings/python_bindings.cpp', 'src/AOTEngine.cpp', 'src/GraphWrapper.cpp', 'tests/mock_hip.cpp', 'src/Communicator.cpp', 'tests/mock_rccl.cpp', 'src/tensorrt/TRTEngine.cpp'],
+        ['bindings/python_bindings.cpp', 'src/AOTEngine.cpp', 'src/GraphWrapper.cpp', 'tests/mock_hip.cpp', 'src/Communicator.cpp', 'tests/mock_rccl.cpp', 'src/tensorrt/TRTEngine.cpp', 'src/RequestContext.cpp'],
         include_dirs=[
             get_pybind_include(),
             'include',

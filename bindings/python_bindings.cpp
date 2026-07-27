@@ -1,5 +1,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/chrono.h>
 
 #include <cstdio>
 #include "../include/GraphWrapper.h"
@@ -7,6 +8,7 @@
 #include "../include/Communicator.h"
 #include "../include/Router.h"
 #include "../include/AsyncAPI.h"
+#include "../include/RequestContext.h"
 
 #include <cstdint>
 #include <stdexcept>
@@ -444,4 +446,71 @@ PYBIND11_MODULE(_core, m) {
     py::class_<InferenceWorker>(m, "InferenceWorker")
         .def(py::init<InferenceQueue&, HardwareRouter&>(), py::arg("queue"), py::arg("router"),
              py::keep_alive<1, 2>(), py::keep_alive<1, 3>(), "Initialize background C++ task consumer executing hardware routines");
+
+    py::enum_<RequestState>(m, "RequestState")
+        .value("RECEIVED", RequestState::RECEIVED)
+        .value("VALIDATED", RequestState::VALIDATED)
+        .value("TOKENIZED", RequestState::TOKENIZED)
+        .value("ENQUEUED", RequestState::ENQUEUED)
+        .value("PREFILL", RequestState::PREFILL)
+        .value("DECODE", RequestState::DECODE)
+        .value("STREAMING", RequestState::STREAMING)
+        .value("COMPLETE", RequestState::COMPLETE)
+        .value("CANCELLED", RequestState::CANCELLED)
+        .value("TIMED_OUT", RequestState::TIMED_OUT)
+        .value("FAILED", RequestState::FAILED)
+        .export_values();
+
+    py::enum_<CompletionReason>(m, "CompletionReason")
+        .value("STREAMING", CompletionReason::STREAMING)
+        .value("EOS", CompletionReason::EOS)
+        .value("STOP_TOKEN", CompletionReason::STOP_TOKEN)
+        .value("LENGTH", CompletionReason::LENGTH)
+        .value("CANCELLED", CompletionReason::CANCELLED)
+        .value("TIMEOUT", CompletionReason::TIMEOUT)
+        .value("ERROR", CompletionReason::ERROR)
+        .export_values();
+
+    py::enum_<Owner>(m, "Owner")
+        .value("Ingress", Owner::Ingress)
+        .value("Scheduler", Owner::Scheduler)
+        .value("Executor", Owner::Executor)
+        .value("Backend", Owner::Backend)
+        .export_values();
+
+    py::register_exception<RequestContextError>(m, "RequestContextError");
+    py::register_exception<InvalidStateTransitionError>(m, "InvalidStateTransitionError");
+    py::register_exception<RequestOwnershipError>(m, "RequestOwnershipError");
+
+    py::class_<RequestContext::Config> config_cls(m, "RequestContextConfig");
+    config_cls.def(py::init<>())
+        .def_readwrite("request_id", &RequestContext::Config::request_id)
+        .def_readwrite("prompt_text", &RequestContext::Config::prompt_text)
+        .def_readwrite("prompt_tokens", &RequestContext::Config::prompt_tokens)
+        .def_readwrite("max_new_tokens", &RequestContext::Config::max_new_tokens)
+        .def_readwrite("temperature", &RequestContext::Config::temperature)
+        .def_readwrite("top_p", &RequestContext::Config::top_p)
+        .def_readwrite("top_k", &RequestContext::Config::top_k)
+        .def_readwrite("stop_token_ids", &RequestContext::Config::stop_token_ids)
+        .def_readwrite("backend_hint", &RequestContext::Config::backend_hint)
+        .def_readwrite("timeout", &RequestContext::Config::timeout)
+        .def_readwrite("initial_owner", &RequestContext::Config::initial_owner);
+
+    py::class_<RequestContext> rc(m, "RequestContext");
+    rc.attr("Config") = config_cls;
+    rc.def(py::init<RequestContext::Config>(), py::arg("config"))
+      .def("request_id", &RequestContext::request_id)
+      .def("prompt_text", &RequestContext::prompt_text)
+      .def("prompt_tokens", &RequestContext::prompt_tokens)
+      .def("max_new_tokens", &RequestContext::max_new_tokens)
+      .def("temperature", &RequestContext::temperature)
+      .def("top_p", &RequestContext::top_p)
+      .def("top_k", &RequestContext::top_k)
+      .def("stop_token_ids", &RequestContext::stop_token_ids)
+      .def("backend_hint", &RequestContext::backend_hint)
+      .def("state", &RequestContext::state)
+      .def("finish_reason", &RequestContext::finish_reason)
+      .def("current_owner", &RequestContext::current_owner)
+      .def("request_cancellation", &RequestContext::request_cancellation)
+      .def("is_cancellation_requested", &RequestContext::is_cancellation_requested);
 }

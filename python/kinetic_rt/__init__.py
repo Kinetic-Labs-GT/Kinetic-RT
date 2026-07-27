@@ -12,6 +12,11 @@ try:
         InferenceWorker,
         TensorDescriptor,
         DataType,
+        RequestState,
+        CompletionReason,
+        Owner,
+        RequestContextConfig,
+        RequestContext,
     )
 except ImportError as e:
     raise ImportError("Unable to load kinetic_rt extension. Ensure the CUDA/ROCm toolkit is correctly installed and the C++ extension compiled successfully.") from e
@@ -21,3 +26,4 @@ class TopologyMismatchError(Exception):
 
 from .orchestrator import KineticRuntime, StreamContext, validate_tensor_for_zero_copy, TensorValidationError
 from .serve import serve
+
