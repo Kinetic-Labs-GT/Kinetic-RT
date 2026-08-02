@@ -10,7 +10,7 @@ binding verification.  The pattern follows tests/test_validation.py.
 
 import sys
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 # Stub out heavy transitive dependencies so that importing the package does
 # not require a GPU runtime or web framework.  Only the native _core
@@ -24,13 +24,10 @@ _STUBS = [
     "sse_starlette", "sse_starlette.sse",
     "transformers",
 ]
-_saved = {}
-for _mod in _STUBS:
-    if _mod not in sys.modules:
-        _saved[_mod] = None
-        sys.modules[_mod] = MagicMock()
 
-import python.kinetic_rt as kinetic_rt  # noqa: E402
+_stub_modules = {name: MagicMock() for name in _STUBS if name not in sys.modules}
+with patch.dict(sys.modules, _stub_modules):
+    import python.kinetic_rt as kinetic_rt  # noqa: E402
 
 
 class TestRequestContextSmoke(unittest.TestCase):
