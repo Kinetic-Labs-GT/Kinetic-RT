@@ -6,14 +6,18 @@
 #include <mutex>
 #include <condition_variable>
 #include <cstdint>
+#include <memory>
+#include <utility>
 #include <pybind11/pybind11.h>
 #include "GraphWrapper.h" // For LockFreeRingBuffer
+#include "RequestContext.h"
 
 struct InferenceRequest {
     uintptr_t input_ptr;
     size_t input_len;
     int max_tokens;
     std::string request_id;
+    std::shared_ptr<RequestContext> context;
 };
 
 struct InferenceResponse {
@@ -27,7 +31,13 @@ public:
     InferenceQueue() {}
 
     void submit(uintptr_t input_ptr, size_t input_len, int max_tokens, const std::string& request_id) {
-        InferenceRequest req{input_ptr, input_len, max_tokens, request_id};
+        RequestContext::Config context_config;
+        context_config.request_id = request_id;
+        context_config.max_new_tokens = max_tokens;
+        context_config.initial_owner = Owner::Ingress;
+        auto context = std::make_shared<RequestContext>(std::move(context_config));
+
+        InferenceRequest req{input_ptr, input_len, max_tokens, request_id, context};
         while(!request_queue_.push(req)) {} // Spin until pushed (assuming capacity is large enough)
     }
 
